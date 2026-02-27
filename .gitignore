@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+build/
+dist/
+logs/
+history/
+setting/
+data/
+*.log
+*.db
+*.migrated
+*.spec
