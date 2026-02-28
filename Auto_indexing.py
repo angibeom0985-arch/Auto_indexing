@@ -34,6 +34,24 @@ LOG_FILE = os.path.join(SETTING_DIR, "auto_indexing_log.txt")
 KAKAO_CONTACT_URL = "https://open.kakao.com/me/david0985"
 
 
+def _window_icon_source() -> str:
+    if getattr(sys, "frozen", False):
+        return sys.executable
+    for p in [os.path.join(APP_BASE_DIR, "david153.ico"), os.path.join(SCRIPT_DIR, "david153.ico")]:
+        if os.path.exists(p):
+            return p
+    return ""
+
+
+def _apply_window_icon(widget: Any) -> None:
+    try:
+        src = _window_icon_source()
+        if src and "QIcon" in globals():
+            widget.setWindowIcon(QIcon(src))
+    except Exception:
+        pass
+
+
 def _migrate_legacy_runtime_files() -> None:
     os.makedirs(SETTING_DIR, exist_ok=True)
     legacy_to_new = [
@@ -59,6 +77,7 @@ _migrate_legacy_runtime_files()
 def show_unregistered_machine_dialog(machine_id: str) -> None:
     dlg = QDialog()
     dlg.setWindowTitle("프로그램 사용 권한")
+    _apply_window_icon(dlg)
     dlg.setModal(True)
     dlg.setFixedSize(690, 560)
     dlg.setStyleSheet(
@@ -195,6 +214,7 @@ def show_unregistered_machine_dialog(machine_id: str) -> None:
 def show_expired_license_dialog() -> None:
     dlg = QDialog()
     dlg.setWindowTitle("프로그램 사용 권한")
+    _apply_window_icon(dlg)
     dlg.setModal(True)
     dlg.setFixedSize(760, 410)
     dlg.setStyleSheet(
@@ -296,6 +316,7 @@ def show_expired_license_dialog() -> None:
 def show_license_failure_dialog(message: str, machine_id: str) -> None:
     dlg = QDialog()
     dlg.setWindowTitle("라이선스 인증 실패")
+    _apply_window_icon(dlg)
     dlg.setModal(True)
     dlg.setFixedSize(600, 305)
     dlg.setStyleSheet(
@@ -435,7 +456,7 @@ try:
     import requests
     from bs4 import BeautifulSoup
     HTTP_AVAILABLE = True
-except Exception:
+except (Exception, KeyboardInterrupt):
     HTTP_AVAILABLE = False
 
 try:
@@ -446,11 +467,8 @@ try:
 except Exception:
     GOOGLE_API_AVAILABLE = False
 
-try:
-    from encryption_manager import EncryptionManager
-    ENCRYPTION_AVAILABLE = True
-except Exception:
-    ENCRYPTION_AVAILABLE = False
+# 암호화 설정(.encryption_salt) 기능은 사용하지 않음.
+ENCRYPTION_AVAILABLE = False
 
 try:
     from seo_prefilter import SEOPreFilter
@@ -467,7 +485,7 @@ except Exception:
 try:
     from PyQt6.QtCore import QMetaObject, QThread, QTimer, Qt, QUrl, Q_ARG, pyqtSignal
     from PyQt6.QtGui import QDesktopServices, QFont, QIcon
-    from PyQt6.QtWidgets import QApplication, QComboBox, QDialog, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton, QTabWidget, QTextBrowser, QTextEdit, QVBoxLayout, QWidget
+    from PyQt6.QtWidgets import QApplication, QComboBox, QDialog, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton, QScrollArea, QTabWidget, QTextBrowser, QTextEdit, QVBoxLayout, QWidget
     GUI_AVAILABLE = True
 except Exception:
     GUI_AVAILABLE = False
@@ -568,11 +586,12 @@ class ConfigManager:
         self.config_file = CONFIG_FILE
         self.encrypted_config_file = ENCRYPTED_CONFIG_FILE
         self.password: Optional[str] = None
-        self.encryption_manager = EncryptionManager() if ENCRYPTION_AVAILABLE else None
+        self.encryption_manager = None
         self.default_config = {
             "google_enabled": True,
             "naver_enabled": True,
             "google_service_account_file": "service-account-key.json",
+            "google_service_account_files": [],
             "google_site_urls": [],
             "google_site_items": [],
             "naver_method": "selenium",
@@ -593,6 +612,21 @@ class ConfigManager:
     def _normalize(self, cfg):
         out = self.default_config.copy()
         out.update(cfg or {})
+        g_files = out.get("google_service_account_files")
+        if not isinstance(g_files, list):
+            g_files = []
+        normalized_g_files: List[str] = []
+        seen_g_files: Set[str] = set()
+        for p in g_files:
+            s = str(p or "").strip()
+            if s and s not in seen_g_files:
+                seen_g_files.add(s)
+                normalized_g_files.append(s)
+        single_g = str(out.get("google_service_account_file", "") or "").strip()
+        if single_g and single_g not in seen_g_files:
+            normalized_g_files.insert(0, single_g)
+        out["google_service_account_files"] = normalized_g_files
+        out["google_service_account_file"] = normalized_g_files[0] if normalized_g_files else "service-account-key.json"
         default_order = str(out.get("submit_order", "oldest") or "oldest").strip().lower()
         if default_order not in ("oldest", "newest"):
             default_order = "oldest"
@@ -1228,6 +1262,19 @@ class GoogleIndexingService:
         os.makedirs(SETTING_DIR, exist_ok=True)
 
     @staticmethod
+    def parse_service_account_files(raw: str) -> List[str]:
+        text = str(raw or "")
+        chunks = re.split(r"[;\n\r]+", text)
+        out: List[str] = []
+        seen: Set[str] = set()
+        for c in chunks:
+            p = c.strip().strip('"').strip("'")
+            if p and p not in seen:
+                seen.add(p)
+                out.append(p)
+        return out
+
+    @staticmethod
     def _today() -> str:
         return datetime.now().strftime("%Y-%m-%d")
 
@@ -1843,14 +1890,34 @@ class IndexingController:
         if service_to_run in ("google", "all") and cfg.get("google_enabled", True) and not self.stop_event.is_set():
             if progress_callback:
                 progress_callback("구글에 검색 등록 요청 중...", 45)
-            if self.google_service.initialize(cfg.get("google_service_account_file", "service-account-key.json")):
-                gs, gf = self.google_service.submit_urls(google_targets, use_batch=cfg.get("use_batch_api", True))
-                res["google_success"] = gs
-                res["errors"] += gf
-                if gs > 0:
-                    self.url_state.mark_submitted("google", google_targets[:gs])
-            else:
+            key_files = cfg.get("google_service_account_files")
+            if not isinstance(key_files, list) or not key_files:
+                key_files = GoogleIndexingService.parse_service_account_files(cfg.get("google_service_account_file", "service-account-key.json"))
+            remaining_targets = list(google_targets)
+            submitted: List[str] = []
+            any_initialized = False
+            for key_path in key_files:
+                if self.stop_event.is_set() or not remaining_targets:
+                    break
+                key = str(key_path or "").strip()
+                if not key:
+                    continue
+                if not self.google_service.initialize(key):
+                    continue
+                any_initialized = True
+                gs, _gf = self.google_service.submit_urls(remaining_targets, use_batch=cfg.get("use_batch_api", True))
+                if gs <= 0:
+                    continue
+                done = remaining_targets[:gs]
+                submitted.extend(done)
+                remaining_targets = remaining_targets[gs:]
+                res["google_success"] += gs
+            if submitted:
+                self.url_state.mark_submitted("google", submitted)
+            if not any_initialized:
                 res["errors"] += len(google_targets)
+            else:
+                res["errors"] += len(remaining_targets)
         if progress_callback:
             progress_callback("완료", 100)
         self.logger.log(
@@ -1891,7 +1958,7 @@ if GUI_AVAILABLE:
                 "warning": (WP_COLORS["warning"], "#e0a400"),
                 "danger": (WP_COLORS["danger"], "#c42d2d"),
                 "secondary": (WP_COLORS["surface_light"], WP_COLORS["primary"]),
-                "add": ("#14B8A6", "#0F766E"),
+                "add": ("#7C3AED", "#6D28D9"),
             }
             base, hover = color_map.get(self.button_type, color_map["primary"])
             text_color = WP_COLORS["text"]
@@ -1929,11 +1996,12 @@ if GUI_AVAILABLE:
         def __init__(self, parent=None):
             super().__init__(parent)
             self.setFont(QFont("맑은 고딕", 11))
-            self.setOpenExternalLinks(True)
+            self.setOpenExternalLinks(False)
+            self.setOpenLinks(False)
 
     class IndexingWorker(QThread):
-        progress_updated = pyqtSignal(str, int)
-        finished = pyqtSignal(dict)
+        progress_updated = pyqtSignal(str, str, int)
+        finished = pyqtSignal(str, dict)
 
         def __init__(self, controller: IndexingController, urls: List[str], service_type: str):
             super().__init__()
@@ -1943,18 +2011,26 @@ if GUI_AVAILABLE:
 
         def run(self):
             if self.service_type == "google":
-                r = self.controller.run_indexing(progress_callback=lambda m, p: self.progress_updated.emit(m, p), google_urls=self.urls, service_to_run="google")
-                self.finished.emit({"total": r.get("total", 0), "success": r.get("google_success", 0), "errors": r.get("errors", 0), "scheduled": r.get("scheduled", 0)})
+                r = self.controller.run_indexing(
+                    progress_callback=lambda m, p: self.progress_updated.emit("google", m, p),
+                    google_urls=self.urls,
+                    service_to_run="google",
+                )
+                self.finished.emit("google", {"total": r.get("total", 0), "success": r.get("google_success", 0), "errors": r.get("errors", 0), "scheduled": r.get("scheduled", 0)})
             else:
-                r = self.controller.run_indexing(progress_callback=lambda m, p: self.progress_updated.emit(m, p), naver_urls=self.urls, service_to_run="naver")
-                self.finished.emit({"total": r.get("total", 0), "success": r.get("naver_success", 0), "errors": r.get("errors", 0), "scheduled": r.get("scheduled", 0)})
+                r = self.controller.run_indexing(
+                    progress_callback=lambda m, p: self.progress_updated.emit("naver", m, p),
+                    naver_urls=self.urls,
+                    service_to_run="naver",
+                )
+                self.finished.emit("naver", {"total": r.get("total", 0), "success": r.get("naver_success", 0), "errors": r.get("errors", 0), "scheduled": r.get("scheduled", 0)})
 
     class ModernIndexingGUI(QMainWindow):
         def __init__(self, usage_period_text: str = "확인 필요"):
             super().__init__()
             self.controller = IndexingController()
-            self.worker: Optional[IndexingWorker] = None
-            self.current_service_type = "google"
+            self.google_worker: Optional[IndexingWorker] = None
+            self.naver_worker: Optional[IndexingWorker] = None
             self.current_config = self.controller.config_manager.default_config.copy()
             self.usage_period_text = usage_period_text
             self._notice_boxes: List[QMessageBox] = []
@@ -1963,13 +2039,52 @@ if GUI_AVAILABLE:
                 QTimer.singleShot(100, self.close)
                 return
             self._show_usage_guides()
+            self._setup_daily_auto_cycle_timer()
+
+        def _setup_daily_auto_cycle_timer(self):
+            self._app_started_ts = time.time()
+            self._next_daily_cycle_ts = self._app_started_ts + 86400
+            self._daily_cycle_pending = False
+            self._daily_cycle_timer = QTimer(self)
+            self._daily_cycle_timer.setInterval(10000)
+            self._daily_cycle_timer.timeout.connect(self._check_daily_auto_cycle)
+            self._daily_cycle_timer.start()
+
+        def _any_worker_running(self) -> bool:
+            return bool(
+                (self.google_worker and self.google_worker.isRunning())
+                or (self.naver_worker and self.naver_worker.isRunning())
+            )
+
+        def _check_daily_auto_cycle(self):
+            now = time.time()
+            should_trigger = now >= self._next_daily_cycle_ts or self._daily_cycle_pending
+            if not should_trigger:
+                return
+
+            if self._any_worker_running():
+                if not self._daily_cycle_pending:
+                    self._daily_cycle_pending = True
+                    self._append_log("google", "ℹ️ 24시간 주기 자동 실행 대기 중 (현재 작업이 끝나면 시작)")
+                    self._append_log("naver", "ℹ️ 24시간 주기 자동 실행 대기 중 (현재 작업이 끝나면 시작)")
+                return
+
+            while self._next_daily_cycle_ts <= now:
+                self._next_daily_cycle_ts += 86400
+            self._daily_cycle_pending = False
+            self._run_daily_auto_cycle()
+
+        def _run_daily_auto_cycle(self):
+            self.save_all_configs()
+            self._append_log("google", "ℹ️ 24시간 경과로 자동 색인 작업을 시작합니다.")
+            self._append_log("naver", "ℹ️ 24시간 경과로 자동 색인 작업을 시작합니다.")
+            self.start_google_indexing(silent=True)
+            self.start_naver_indexing(silent=True)
 
         def init_ui(self):
             self.setWindowTitle("Auto_Indexing - 구글 + 네이버 색인 자동화")
             self.setGeometry(100, 80, 1450, 920)
-            icon_path = os.path.join(SCRIPT_DIR, "david153.ico")
-            if os.path.exists(icon_path):
-                self.setWindowIcon(QIcon(icon_path))
+            _apply_window_icon(self)
             self.setStyleSheet(
                 f"""
                 QMainWindow {{
@@ -2082,7 +2197,7 @@ if GUI_AVAILABLE:
             layout = QVBoxLayout(tab)
             settings = QGroupBox("구글 연결 설정")
             grid = QGridLayout(settings)
-            grid.addWidget(QLabel("구글 인증 키 파일"), 0, 0)
+            grid.addWidget(QLabel("JSON 파일"), 0, 0)
             self.google_service_file_input = GlassLineEdit("service-account-key.json")
             file_row = QWidget()
             file_row_layout = QHBoxLayout(file_row)
@@ -2091,11 +2206,20 @@ if GUI_AVAILABLE:
             file_row_layout.addWidget(self.google_service_file_input, 1)
             self.google_key_upload_btn = GlassButton("업로드", "secondary")
             self.google_key_upload_btn.clicked.connect(lambda: self._run_action_with_notice(self._upload_google_key_file, "파일 업로드가 완료되었습니다."))
+            self.google_key_add_btn = GlassButton("+추가", "add")
+            self.google_key_add_btn.clicked.connect(lambda: self._run_action_with_notice(self._append_google_key_files, "파일 추가가 완료되었습니다."))
             self.google_key_clear_btn = GlassButton("삭제", "danger")
             self.google_key_clear_btn.clicked.connect(lambda: self._run_action_with_notice(self._clear_google_key_file, "파일 삭제가 완료되었습니다."))
             file_row_layout.addWidget(self.google_key_upload_btn, 0)
+            file_row_layout.addWidget(self.google_key_add_btn, 0)
             file_row_layout.addWidget(self.google_key_clear_btn, 0)
             grid.addWidget(file_row, 0, 1)
+            self.google_key_extra_widget = QWidget()
+            self.google_key_extra_layout = QVBoxLayout(self.google_key_extra_widget)
+            self.google_key_extra_layout.setContentsMargins(0, 6, 0, 0)
+            self.google_key_extra_layout.setSpacing(6)
+            self.google_key_extra_rows: List[Dict[str, Any]] = []
+            grid.addWidget(self.google_key_extra_widget, 1, 1)
             layout.addWidget(settings)
             seeds = QGroupBox("색인 요청할 사이트 URL")
             s = QVBoxLayout(seeds)
@@ -2105,6 +2229,13 @@ if GUI_AVAILABLE:
             self.google_seed_urls_layout.setContentsMargins(0, 0, 0, 0)
             self.google_seed_urls_layout.setSpacing(8)
             self.google_seed_urls_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+            self.google_seed_scroll = QScrollArea()
+            self.google_seed_scroll.setWidgetResizable(True)
+            self.google_seed_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.google_seed_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            self.google_seed_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+            self.google_seed_scroll.setWidget(self.google_seed_urls_widget)
+            self.google_seed_scroll.setMinimumHeight(240)
             seed_btn_row = QHBoxLayout()
             self.google_add_seed_btn = GlassButton("+ 추가", "add")
             self.google_add_seed_btn.clicked.connect(lambda: self._add_seed_url_input("google"))
@@ -2114,14 +2245,14 @@ if GUI_AVAILABLE:
             seed_btn_row.addWidget(self.google_seed_save_btn, 0, Qt.AlignmentFlag.AlignLeft)
             seed_btn_row.addStretch(1)
             s.addLayout(seed_btn_row)
-            s.addWidget(self.google_seed_urls_widget)
-            s.addStretch(1)
+            s.addWidget(self.google_seed_scroll, 1)
             self._add_seed_url_input("google")
             log_group = QGroupBox("로그 메시지")
             gl = QVBoxLayout(log_group)
             self.google_log = GlassTextEdit()
             self.google_log.setReadOnly(True)
             self.google_log.textChanged.connect(lambda: self._scroll_log_to_bottom(self.google_log))
+            self.google_log.anchorClicked.connect(self._handle_log_link_clicked)
             gl.addWidget(self.google_log)
             split_row = QHBoxLayout()
             split_row.setSpacing(12)
@@ -2135,7 +2266,7 @@ if GUI_AVAILABLE:
                 row.addWidget(b)
             layout.addLayout(row)
             self.google_start_btn.clicked.connect(self.start_google_indexing)
-            self.google_stop_btn.clicked.connect(lambda: self._run_action_with_notice(self.stop_indexing, "중지 요청이 완료되었습니다."))
+            self.google_stop_btn.clicked.connect(lambda: self._run_action_with_notice(lambda: self.stop_indexing("google"), "중지 요청이 완료되었습니다."))
             return tab
 
         def _build_naver_tab(self):
@@ -2166,6 +2297,13 @@ if GUI_AVAILABLE:
             self.naver_seed_urls_layout.setContentsMargins(0, 0, 0, 0)
             self.naver_seed_urls_layout.setSpacing(8)
             self.naver_seed_urls_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+            self.naver_seed_scroll = QScrollArea()
+            self.naver_seed_scroll.setWidgetResizable(True)
+            self.naver_seed_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.naver_seed_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            self.naver_seed_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+            self.naver_seed_scroll.setWidget(self.naver_seed_urls_widget)
+            self.naver_seed_scroll.setMinimumHeight(240)
             seed_btn_row = QHBoxLayout()
             self.naver_add_seed_btn = GlassButton("+ 추가", "add")
             self.naver_add_seed_btn.clicked.connect(lambda: self._add_seed_url_input("naver"))
@@ -2175,14 +2313,14 @@ if GUI_AVAILABLE:
             seed_btn_row.addWidget(self.naver_seed_save_btn, 0, Qt.AlignmentFlag.AlignLeft)
             seed_btn_row.addStretch(1)
             sd.addLayout(seed_btn_row)
-            sd.addWidget(self.naver_seed_urls_widget)
-            sd.addStretch(1)
+            sd.addWidget(self.naver_seed_scroll, 1)
             self._add_seed_url_input("naver")
             log_group = QGroupBox("로그 메시지")
             nl = QVBoxLayout(log_group)
             self.naver_log = GlassTextEdit()
             self.naver_log.setReadOnly(True)
             self.naver_log.textChanged.connect(lambda: self._scroll_log_to_bottom(self.naver_log))
+            self.naver_log.anchorClicked.connect(self._handle_log_link_clicked)
             nl.addWidget(self.naver_log)
             split_row = QHBoxLayout()
             split_row.setSpacing(12)
@@ -2196,7 +2334,7 @@ if GUI_AVAILABLE:
                 row.addWidget(b)
             layout.addLayout(row)
             self.naver_start_btn.clicked.connect(self.start_naver_indexing)
-            self.naver_stop_btn.clicked.connect(lambda: self._run_action_with_notice(self.stop_indexing, "중지 요청이 완료되었습니다."))
+            self.naver_stop_btn.clicked.connect(lambda: self._run_action_with_notice(lambda: self.stop_indexing("naver"), "중지 요청이 완료되었습니다."))
             return tab
 
         @staticmethod
@@ -2237,9 +2375,11 @@ if GUI_AVAILABLE:
             if service == "google":
                 self.google_seed_rows.append({"widget": row_widget, "input": inp, "order": order_combo})
                 self.google_seed_urls_layout.addWidget(row_widget)
+                QTimer.singleShot(0, lambda: self.google_seed_scroll.verticalScrollBar().setValue(self.google_seed_scroll.verticalScrollBar().maximum()))
             else:
                 self.naver_seed_rows.append({"widget": row_widget, "input": inp, "order": order_combo})
                 self.naver_seed_urls_layout.addWidget(row_widget)
+                QTimer.singleShot(0, lambda: self.naver_seed_scroll.verticalScrollBar().setValue(self.naver_seed_scroll.verticalScrollBar().maximum()))
 
         def _set_seed_items(self, service: str, items: List[Dict[str, str]]):
             rows = self.google_seed_rows if service == "google" else self.naver_seed_rows
@@ -2280,6 +2420,78 @@ if GUI_AVAILABLE:
             target = self.google_log if service == "google" else self.naver_log
             target.append(message)
             self._scroll_log_to_bottom(target)
+
+        def _handle_log_link_clicked(self, url: QUrl):
+            u = (url.toString() or "").strip()
+            if u == "help://google-key":
+                self._show_google_key_guide_dialog()
+                return
+            if u:
+                QDesktopServices.openUrl(url)
+
+        def _show_google_key_guide_dialog(self):
+            dlg = QDialog(self)
+            dlg.setWindowTitle("구글 인증 키 발급 방법")
+            dlg.resize(860, 700)
+            layout = QVBoxLayout(dlg)
+            guide = QTextBrowser(dlg)
+            guide.setOpenExternalLinks(True)
+            guide.setHtml(
+                """
+                <div style="font-size:14px; line-height:1.8; color:#f1f5f9;">
+                  <h2 style="margin:0 0 10px 0;">구글 인증 키(JSON) 발급 방법</h2>
+                  <p style="margin:0 0 12px 0;">처음 사용자 기준으로, 아래 순서대로 진행하면 됩니다.</p>
+                  <h3 style="margin:14px 0 6px 0;">1) Google Cloud 프로젝트 만들기</h3>
+                  <p style="margin:0 0 8px 0;">
+                    - <a href="https://console.cloud.google.com/" style="color:#38bdf8;">Google Cloud Console 열기</a><br>
+                    - 상단 프로젝트 선택 메뉴에서 <b>새 프로젝트</b> 생성
+                  </p>
+                  <h3 style="margin:14px 0 6px 0;">2) Indexing API 사용 설정</h3>
+                  <p style="margin:0 0 8px 0;">
+                    - 좌측 메뉴 <b>API 및 서비스 → 라이브러리</b><br>
+                    - 검색창에 <b>indexing api</b> 입력<br>
+                    - 결과가 여러 개 나오면 <b>Web Search Indexing API (Google)</b>를 클릭<br>
+                    - 선택한 <b>Web Search Indexing API</b> 화면에서 <b>사용</b> 클릭
+                  </p>
+                  <h3 style="margin:14px 0 6px 0;">3) 서비스 계정 만들기</h3>
+                  <p style="margin:0 0 8px 0;">
+                    - <b>API 및 서비스 → 사용자 인증 정보</b> 이동<br>
+                    - <b>사용자 인증 정보 만들기 → 서비스 계정</b> 선택<br>
+                    - 이름 입력 후 생성
+                  </p>
+                  <h3 style="margin:14px 0 6px 0;">4) JSON 키 발급</h3>
+                  <p style="margin:0 0 8px 0;">
+                    - 방금 만든 서비스 계정 클릭<br>
+                    - <b>키</b> 탭 → <b>키 추가</b> → <b>새 키 만들기</b><br>
+                    - 유형 <b>JSON</b> 선택 후 생성<br>
+                    - JSON 파일이 PC에 다운로드됨
+                  </p>
+                  <h3 style="margin:14px 0 6px 0;">5) Search Console 권한 연결</h3>
+                  <p style="margin:0 0 8px 0;">
+                    - JSON 파일 안의 <b>client_email</b> 값을 복사<br>
+                    - <a href="https://search.google.com/search-console" style="color:#38bdf8;">Google Search Console</a> 접속<br>
+                    - 내 사이트의 <b>설정 → 사용자 및 권한</b>에서 해당 이메일을 <b>소유자/전체 권한</b>으로 추가
+                  </p>
+                  <h3 style="margin:14px 0 6px 0;">6) 프로그램에 등록</h3>
+                  <p style="margin:0 0 8px 0;">
+                    - 프로그램의 <b>JSON 파일</b> 칸에서 경로를 직접 입력하거나<br>
+                    - 옆의 <b>업로드</b> 버튼으로 JSON 파일을 선택<br>
+                    - 파일을 더 붙일 때는 <b>+추가</b> 사용
+                  </p>
+                  <p style="margin:16px 0 0 0; color:#ef4444; font-weight:700;">
+                    주의: 사이트 권한 연결(Search Console 사용자 추가)을 하지 않으면 색인 요청이 실패할 수 있습니다.
+                  </p>
+                </div>
+                """
+            )
+            layout.addWidget(guide, 1)
+            btn_row = QHBoxLayout()
+            btn_row.addStretch(1)
+            close_btn = GlassButton("닫기", "secondary")
+            close_btn.clicked.connect(dlg.accept)
+            btn_row.addWidget(close_btn)
+            layout.addLayout(btn_row)
+            dlg.exec()
 
         @staticmethod
         def _scroll_log_to_bottom(widget: QTextEdit):
@@ -2323,18 +2535,105 @@ if GUI_AVAILABLE:
         def _save_from_seed_enter(self):
             self._run_action_with_notice(self.save_all_configs, "저장이 완료되었습니다.")
 
+        def _add_google_key_upload_row(self, value: str = ""):
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(8)
+
+            key_input = GlassLineEdit("추가 JSON 파일 경로")
+            key_input.returnPressed.connect(self._save_from_seed_enter)
+            if value:
+                key_input.setText(str(value).strip())
+            upload_btn = GlassButton("업로드", "secondary")
+            remove_btn = GlassButton("삭제", "danger")
+
+            def _upload_to_this():
+                path, _ = QFileDialog.getOpenFileName(self, "JSON 파일 선택", SCRIPT_DIR, "JSON files (*.json);;All files (*.*)")
+                if path:
+                    key_input.setText(str(path).strip())
+                    self.save_all_configs()
+
+            def _remove_this():
+                if row in [r.get("row") for r in self.google_key_extra_rows]:
+                    self.google_key_extra_layout.removeWidget(row)
+                    row.deleteLater()
+                    self.google_key_extra_rows = [r for r in self.google_key_extra_rows if r.get("row") is not row]
+                    self.save_all_configs()
+
+            upload_btn.clicked.connect(_upload_to_this)
+            remove_btn.clicked.connect(_remove_this)
+            row_layout.addWidget(key_input, 1)
+            row_layout.addWidget(upload_btn, 0)
+            row_layout.addWidget(remove_btn, 0)
+
+            self.google_key_extra_layout.addWidget(row)
+            self.google_key_extra_rows.append({"row": row, "input": key_input, "upload": upload_btn, "remove": remove_btn})
+            return True
+
+        def _collect_google_key_files(self) -> List[str]:
+            files: List[str] = []
+            main_input = getattr(self, "google_service_file_input", None)
+            main_text_fn = getattr(main_input, "text", None)
+            if callable(main_text_fn):
+                for p in GoogleIndexingService.parse_service_account_files(str(main_text_fn() or "")):
+                    if p and p not in files:
+                        files.append(p)
+            for row in self.google_key_extra_rows:
+                inp = row.get("input")
+                text_fn = getattr(inp, "text", None)
+                if callable(text_fn):
+                    for p in GoogleIndexingService.parse_service_account_files(str(text_fn() or "")):
+                        if p and p not in files:
+                            files.append(p)
+            return files
+
+        def _set_google_key_files(self, files: List[str]):
+            for row in self.google_key_extra_rows:
+                widget = row.get("row")
+                if widget is not None:
+                    self.google_key_extra_layout.removeWidget(widget)
+                    widget.deleteLater()
+            self.google_key_extra_rows = []
+
+            normalized: List[str] = []
+            for p in files:
+                s = str(p or "").strip()
+                if s and s not in normalized:
+                    normalized.append(s)
+
+            self.google_service_file_input.setText(normalized[0] if normalized else "")
+            for p in normalized[1:]:
+                self._add_google_key_upload_row(p)
+
         def _upload_google_key_file(self):
-            path, _ = QFileDialog.getOpenFileName(self, "구글 인증 키 파일 선택", SCRIPT_DIR, "JSON files (*.json);;All files (*.*)")
-            if path:
-                self.google_service_file_input.setText(path)
+            paths, _ = QFileDialog.getOpenFileNames(self, "JSON 파일 선택(최대 2개)", SCRIPT_DIR, "JSON files (*.json);;All files (*.*)")
+            if paths:
+                selected = [str(p or "").strip() for p in paths if str(p or "").strip()]
+                if len(selected) > 2:
+                    selected = selected[:2]
+                self._set_google_key_files(selected)
+                self.save_all_configs()
+                return True
+            return False
+
+        def _append_google_key_files(self):
+            paths, _ = QFileDialog.getOpenFileNames(self, "JSON 파일 추가(복수 선택 가능)", SCRIPT_DIR, "JSON files (*.json);;All files (*.*)")
+            if paths:
+                merged = self._collect_google_key_files()
+                for p in paths:
+                    s = str(p or "").strip()
+                    if s and s not in merged:
+                        merged.append(s)
+                self._set_google_key_files(merged)
                 self.save_all_configs()
                 return True
             return False
 
         def _clear_google_key_file(self):
-            if not self.google_service_file_input.text().strip():
+            if not self._collect_google_key_files():
                 return False
-            self.google_service_file_input.clear()
+            self._set_google_key_files([])
             self.save_all_configs()
             return True
 
@@ -2351,17 +2650,24 @@ if GUI_AVAILABLE:
                 """
                 <div style="font-size:15px; line-height:2.05;">
                   <h2 style="font-size:20px; margin:0 0 2px 0; line-height:1.25;">구글 색인 자동화 사용 방법</h2>
-                  <h3 style="font-size:17px; margin:0 0 12px 0;">[구글 인증 키 파일]</h3>
-                  <p style="margin:0 0 8px 0;">- 여기에 <b>서비스 계정 JSON 파일 경로</b>를 입력합니다.<br>(업로드 버튼 사용 가능)</p>
-                  <p style="margin:0 0 16px 0;">- 아직 파일이 없으면 Google Cloud에서<br>Indexing API용 서비스 계정 키(JSON)를 먼저 발급해야 합니다.</p>
-                  <h3 style="font-size:17px; margin:0 0 12px 0;">[색인 요청할 사이트 URL]</h3>
-                  <p style="margin:0 0 8px 0;">- 색인할 사이트의 <b>도메인 URL</b>을 입력합니다.<br>예) https://example.com</p>
-                  <p style="margin:0 0 16px 0;">- 사이트가 여러 개면 <b>+ 추가</b>로 입력칸을 늘려서 각각 입력합니다.</p>
-                  <h3 style="font-size:17px; margin:0 0 12px 0;">[버튼 사용 순서]</h3>
-                  <p style="margin:0 0 8px 0;">1. 필요한 항목을 입력합니다.</p>
-                  <p style="margin:0 0 8px 0;">2. <b>저장</b> 버튼을 눌러 설정을 저장합니다.</p>
-                  <p style="margin:0;">3. <b>구글 등록 시작</b> 버튼을 누르면 자동으로 색인 요청을 진행합니다.</p>
-                  <p style="margin:12px 0 0 0; letter-spacing:1px;">=================================</p>
+                  <p style="margin:0 0 10px 0; color:#cbd5e1;">처음 사용하는 분도 그대로 따라 할 수 있게, 입력 칸 기준으로 설명합니다.</p>
+                  <h3 style="font-size:17px; margin:0 0 10px 0;">[JSON 파일]</h3>
+                  <p style="margin:0 0 7px 0;">- 이 칸에는 <b>서비스 계정 JSON 파일</b>을 등록합니다.</p>
+                  <p style="margin:0 0 7px 0;">- <b>업로드</b>: 지금 선택한 파일들로 목록을 새로 바꿉니다.</p>
+                  <p style="margin:0 0 7px 0;">- <b>+추가</b>: 이미 등록된 목록에 JSON 파일을 더 붙입니다.</p>
+                  <p style="margin:0 0 7px 0;">- <b>삭제</b>: 등록된 JSON 목록을 비웁니다.</p>
+                  <p style="margin:0 0 14px 0;">- 발급이 어려우면 <a href="help://google-key" style="color:#38bdf8; text-decoration:underline;"><b>구글 인증 키 발급 방법</b></a>을 눌러 상세 안내를 보세요.</p>
+                  <h3 style="font-size:17px; margin:0 0 10px 0;">[색인 요청할 사이트 URL]</h3>
+                  <p style="margin:0 0 7px 0;">- 색인할 사이트의 <b>도메인 URL</b>을 입력합니다. 예) https://example.com</p>
+                  <p style="margin:0 0 7px 0;">- 사이트가 여러 개면 <b>+ 추가</b>로 칸을 늘려 각각 입력합니다.</p>
+                  <p style="margin:0 0 14px 0;">- 각 URL 오른쪽에서 사이트별로 <b>요청 순서</b>를 고를 수 있습니다.<br>(가장 오래된 글부터 / 가장 최신 글부터)</p>
+                  <h3 style="font-size:17px; margin:0 0 10px 0;">[버튼 사용 순서]</h3>
+                  <p style="margin:0 0 7px 0;">1. JSON 파일과 사이트 URL을 입력합니다.</p>
+                  <p style="margin:0 0 7px 0;">2. <b>저장</b> 버튼으로 현재 입력값을 저장합니다.</p>
+                  <p style="margin:0 0 7px 0;">3. <b>▶ 구글 등록 시작</b> 버튼을 누르면 자동으로 색인 요청을 진행합니다.</p>
+                  <p style="margin:0 0 7px 0;">4. JSON이 여러 개면 키를 순서대로 사용해 남은 URL을 계속 처리합니다.</p>
+                  <p style="margin:0 0 7px 0;">5. 구글/네이버는 각각 독립 실행이라, 필요하면 두 탭을 함께 실행할 수 있습니다.</p>
+                  <p style="margin:12px 0 0 0; color:#cbd5e1;">구글 설정이 어렵다면 구글 기능은 생략하고 네이버만 사용해도 됩니다.</p>
                 </div>
                 """
             )
@@ -2369,23 +2675,27 @@ if GUI_AVAILABLE:
                 """
                 <div style="font-size:15px; line-height:2.05;">
                   <h2 style="font-size:20px; margin:0 0 2px 0; line-height:1.25;">네이버 색인 자동화 사용 방법</h2>
-                  <div style="margin-bottom:12px; padding:10px 12px; border:1px solid #dc3232; border-radius:8px; color:#ffd7d7;">
+                  <p style="margin:0 0 10px 0; color:#cbd5e1;">입력 칸 이름 그대로 따라 입력하면 바로 사용할 수 있습니다.</p>
+                  <div style="margin-bottom:10px; padding:10px 12px; border:1px solid #dc3232; border-radius:8px; color:#ffd7d7;">
                     <b>중요:</b> 네이버 계정은 <b>서치어드바이저에 사이트를 등록한 계정</b>이어야 합니다.
                   </div>
                   <div style="margin-bottom:12px; padding:10px 12px; border:1px solid #dc3232; border-radius:8px; color:#ffd7d7;">
                     <b>필수 조건:</b> 네이버 기능은 <b>Rank Math 플러그인을 사용하는 워드프레스 사이트</b>만 지원합니다.
                   </div>
-                  <h3 style="font-size:17px; margin:0 0 12px 0;">[네이버 계정 설정]</h3>
-                  <p style="margin:0 0 8px 0;">- <b>네이버 로그인 아이디</b>: 서치어드바이저에 사이트를 등록한 계정 아이디</p>
-                  <p style="margin:0 0 16px 0;">- <b>네이버 비밀번호</b>: 해당 계정 비밀번호<br>(공개/비공개 버튼으로 확인 가능)</p>
-                  <h3 style="font-size:17px; margin:0 0 12px 0;">[색인 요청할 사이트 URL]</h3>
-                  <p style="margin:0 0 8px 0;">- 색인할 사이트의 <b>도메인 URL</b>을 입력합니다.<br>예) https://example.com</p>
-                  <p style="margin:0 0 16px 0;">- 여러 사이트를 쓰면 <b>+ 추가</b>로 칸을 늘려 입력합니다.</p>
-                  <h3 style="font-size:17px; margin:0 0 12px 0;">[버튼 사용 순서]</h3>
-                  <p style="margin:0 0 8px 0;">1. 위 항목을 입력합니다.</p>
-                  <p style="margin:0 0 8px 0;">2. <b>저장</b> 버튼을 눌러 설정을 저장합니다.</p>
-                  <p style="margin:0;">3. <b>네이버 색인 요청</b> 버튼을 누르면 자동으로 진행됩니다.</p>
-                  <p style="margin:12px 0 0 0; letter-spacing:1px;">=================================</p>
+                  <h3 style="font-size:17px; margin:0 0 10px 0;">[네이버 계정 설정]</h3>
+                  <p style="margin:0 0 7px 0;">- <b>네이버 로그인 아이디</b>: 사이트를 등록한 네이버 계정 아이디</p>
+                  <p style="margin:0 0 14px 0;">- <b>네이버 비밀번호</b>: 해당 계정 비밀번호 (공개/비공개 버튼 지원)</p>
+                  <h3 style="font-size:17px; margin:0 0 10px 0;">[색인 요청할 사이트 URL]</h3>
+                  <p style="margin:0 0 7px 0;">- 색인할 사이트의 <b>도메인 URL</b>을 입력합니다. 예) https://example.com</p>
+                  <p style="margin:0 0 7px 0;">- 여러 사이트를 쓰면 <b>+ 추가</b>로 칸을 늘려 입력합니다.</p>
+                  <p style="margin:0 0 14px 0;">- 각 URL 오른쪽에서 사이트별로 <b>요청 순서</b>를 고를 수 있습니다.<br>(가장 오래된 글부터 / 가장 최신 글부터)</p>
+                  <h3 style="font-size:17px; margin:0 0 10px 0;">[버튼 사용 순서]</h3>
+                  <p style="margin:0 0 7px 0;">1. 네이버 계정과 사이트 URL을 입력합니다.</p>
+                  <p style="margin:0 0 7px 0;">2. <b>저장</b> 버튼으로 현재 입력값을 저장합니다.</p>
+                  <p style="margin:0 0 7px 0;">3. <b>▶ 네이버 색인 요청</b> 버튼을 누르면 자동으로 진행됩니다.</p>
+                  <p style="margin:0 0 7px 0;">4. 사이트를 하나씩 처리하며, 사이트별 오늘 남은 할당량만큼만 요청합니다.</p>
+                  <p style="margin:0 0 7px 0;">5. 크롬 로그인 상태를 유지해 다음 실행 시 재로그인 부담을 줄입니다.</p>
+                  <p style="margin:0;">6. 구글/네이버는 각각 독립 실행이라, 필요하면 두 탭을 함께 실행할 수 있습니다.</p>
                 </div>
                 """
             )
@@ -2399,10 +2709,12 @@ if GUI_AVAILABLE:
         def _gather_config(self):
             google_seed_items = self._collect_seed_items("google")
             naver_seed_items = self._collect_seed_items("naver")
+            google_key_files = self._collect_google_key_files()
             return {
                 "google_enabled": True,
                 "naver_enabled": True,
-                "google_service_account_file": self.google_service_file_input.text().strip(),
+                "google_service_account_file": (google_key_files[0] if google_key_files else self.google_service_file_input.text().strip()),
+                "google_service_account_files": google_key_files,
                 "google_site_items": google_seed_items,
                 "google_site_urls": [it["url"] for it in google_seed_items],
                 "naver_method": "selenium",
@@ -2416,7 +2728,11 @@ if GUI_AVAILABLE:
             }
 
         def _apply_config(self, c):
-            self.google_service_file_input.setText(c.get("google_service_account_file", "service-account-key.json"))
+            g_files = c.get("google_service_account_files")
+            if isinstance(g_files, list) and g_files:
+                self._set_google_key_files([str(x).strip() for x in g_files if str(x).strip()])
+            else:
+                self._set_google_key_files(GoogleIndexingService.parse_service_account_files(c.get("google_service_account_file", "service-account-key.json")))
             self.naver_username_input.setText(c.get("naver_username", ""))
             self.naver_password_input.setText(c.get("naver_password", ""))
             global_order = self._normalize_order_value(c.get("submit_order", "oldest"))
@@ -2432,25 +2748,7 @@ if GUI_AVAILABLE:
             self._on_naver_method_changed("selenium")
 
         def initialize_encryption_and_load_config(self):
-            cm = self.controller.config_manager
-            if os.path.exists(cm.encrypted_config_file):
-                if not PASSWORD_DIALOG_AVAILABLE:
-                    QMessageBox.warning(self, "비밀번호 필요", "암호화 설정 파일이 있지만 비밀번호 창을 사용할 수 없습니다.")
-                    return False
-                while True:
-                    dlg = PasswordDialog(mode="login", parent=self)
-                    if dlg.exec() != QDialog.DialogCode.Accepted:
-                        return False
-                    cfg = cm.load_config(dlg.get_password())
-                    if cfg is not None:
-                        self.current_config = cfg
-                        self._apply_config(cfg)
-                        return True
-                    QMessageBox.warning(self, "오류", "비밀번호가 올바르지 않거나 복호화에 실패했습니다.")
-            if not os.path.exists(cm.config_file) and ENCRYPTION_AVAILABLE and PASSWORD_DIALOG_AVAILABLE:
-                dlg = PasswordDialog(mode="setup", parent=self)
-                if dlg.exec() == QDialog.DialogCode.Accepted:
-                    cm.password = dlg.get_password()
+            # 암호화 설정 기능을 사용하지 않으므로 일반 설정만 로드한다.
             self.load_all_configs()
             return True
 
@@ -2478,79 +2776,88 @@ if GUI_AVAILABLE:
             else:
                 QMessageBox.warning(self, "오류", "설정 저장에 실패했습니다.")
 
-        def _set_running(self, running: bool):
-            for b in [
-                self.google_start_btn,
-                self.naver_start_btn,
-                self.naver_settings_save_btn,
-                self.naver_password_toggle_btn,
-                self.google_seed_save_btn,
-                self.naver_seed_save_btn,
-                self.google_key_upload_btn,
-                self.google_key_clear_btn,
-            ]:
-                b.setEnabled(not running)
-            for b in [self.google_stop_btn, self.naver_stop_btn]:
-                b.setEnabled(running)
+        def _set_service_running(self, service: str, running: bool):
+            if service == "google":
+                self.google_start_btn.setEnabled(not running)
+                self.google_stop_btn.setEnabled(running)
+            else:
+                self.naver_start_btn.setEnabled(not running)
+                self.naver_stop_btn.setEnabled(running)
 
-        def start_google_indexing(self):
-            if self.worker and self.worker.isRunning():
-                QMessageBox.information(self, "실행 중", "이미 작업이 실행 중입니다.")
+        def _new_runtime_controller(self, service: str) -> IndexingController:
+            c = IndexingController()
+            c.logger.set_gui_log_widget(self.google_log if service == "google" else self.naver_log)
+            return c
+
+        def start_google_indexing(self, silent: bool = False):
+            if self.google_worker and self.google_worker.isRunning():
+                if not silent:
+                    QMessageBox.information(self, "실행 중", "구글 작업이 이미 실행 중입니다.")
                 return
             seeds = self._collect_seed_urls("google")
             if not seeds:
-                QMessageBox.warning(self, "입력 필요", "구글 탭에 사이트 주소를 1개 이상 입력하세요.")
+                if silent:
+                    self._append_log("google", "ℹ️ 자동 실행 건너뜀: 구글 사이트 URL이 없습니다.")
+                else:
+                    QMessageBox.warning(self, "입력 필요", "구글 탭에 사이트 주소를 1개 이상 입력하세요.")
                 return
             self.save_all_configs()
-            self.current_service_type = "google"
-            self.controller.logger.set_gui_log_widget(self.google_log)
-            self.worker = IndexingWorker(self.controller, seeds, "google")
-            self.worker.progress_updated.connect(self.on_progress)
-            self.worker.finished.connect(self.on_finished)
-            self._set_running(True)
+            worker_controller = self._new_runtime_controller("google")
+            self.google_worker = IndexingWorker(worker_controller, seeds, "google")
+            self.google_worker.progress_updated.connect(self.on_progress)
+            self.google_worker.finished.connect(self.on_finished)
+            self._set_service_running("google", True)
             self.status_label.setText("구글 등록 작업 실행 중...")
             self.progress_bar.setValue(0)
-            self.worker.start()
+            self.google_worker.start()
 
-        def start_naver_indexing(self):
-            if self.worker and self.worker.isRunning():
-                QMessageBox.information(self, "실행 중", "이미 작업이 실행 중입니다.")
+        def start_naver_indexing(self, silent: bool = False):
+            if self.naver_worker and self.naver_worker.isRunning():
+                if not silent:
+                    QMessageBox.information(self, "실행 중", "네이버 작업이 이미 실행 중입니다.")
                 return
             seeds = self._collect_seed_urls("naver")
             if not seeds:
-                QMessageBox.warning(self, "입력 필요", "네이버 탭에 사이트 주소를 1개 이상 입력하세요.")
+                if silent:
+                    self._append_log("naver", "ℹ️ 자동 실행 건너뜀: 네이버 사이트 URL이 없습니다.")
+                else:
+                    QMessageBox.warning(self, "입력 필요", "네이버 탭에 사이트 주소를 1개 이상 입력하세요.")
                 return
             self.save_all_configs()
-            self.current_service_type = "naver"
-            self.controller.logger.set_gui_log_widget(self.naver_log)
-            self.worker = IndexingWorker(self.controller, seeds, "naver")
-            self.worker.progress_updated.connect(self.on_progress)
-            self.worker.finished.connect(self.on_finished)
-            self._set_running(True)
+            worker_controller = self._new_runtime_controller("naver")
+            self.naver_worker = IndexingWorker(worker_controller, seeds, "naver")
+            self.naver_worker.progress_updated.connect(self.on_progress)
+            self.naver_worker.finished.connect(self.on_finished)
+            self._set_service_running("naver", True)
             self.status_label.setText("네이버 색인 요청 실행 중...")
             self.progress_bar.setValue(0)
-            self.worker.start()
+            self.naver_worker.start()
 
-        def stop_indexing(self):
-            if self.worker and self.worker.isRunning():
-                self.controller.stop_indexing()
-                self.status_label.setText("중지 요청 중...")
+        def stop_indexing(self, service: str):
+            worker = self.google_worker if service == "google" else self.naver_worker
+            if worker and worker.isRunning():
+                worker.controller.stop_indexing()
+                self.status_label.setText(f"{'구글' if service == 'google' else '네이버'} 중지 요청 중...")
             else:
                 self.status_label.setText("실행 중인 작업이 없습니다.")
 
-        def on_progress(self, message: str, progress: int):
-            self.status_label.setText(message)
+        def on_progress(self, service: str, message: str, progress: int):
+            prefix = "구글" if service == "google" else "네이버"
+            self.status_label.setText(f"[{prefix}] {message}")
             self.progress_bar.setValue(max(0, min(100, progress)))
-            self._append_log(self.current_service_type, message)
+            self._append_log(service, message)
 
-        def on_finished(self, result: Dict[str, int]):
-            self._set_running(False)
+        def on_finished(self, service: str, result: Dict[str, int]):
+            self._set_service_running(service, False)
             self.progress_bar.setValue(100)
             self.status_label.setText("완료")
-            self._auto_commit_async(result)
-            service_label = "구글" if self.current_service_type == "google" else "네이버"
+            self._auto_commit_async(service, result)
+            service_label = "구글" if service == "google" else "네이버"
             self._show_brief_notice(f"{service_label} 작업이 완료되었습니다.")
-            self.worker = None
+            if service == "google":
+                self.google_worker = None
+            else:
+                self.naver_worker = None
 
         @staticmethod
         def _run_git(cwd: str, args: List[str], timeout: int = 45) -> subprocess.CompletedProcess:
@@ -2569,10 +2876,10 @@ if GUI_AVAILABLE:
                     return base
             return None
 
-        def _auto_commit_async(self, result: Dict[str, int]):
-            Thread(target=self._auto_commit_worker, args=(result,), daemon=True).start()
+        def _auto_commit_async(self, service: str, result: Dict[str, int]):
+            Thread(target=self._auto_commit_worker, args=(service, result), daemon=True).start()
 
-        def _auto_commit_worker(self, result: Dict[str, int]):
+        def _auto_commit_worker(self, service: str, result: Dict[str, int]):
             repo_dir = self._find_git_repo_dir()
             if not repo_dir:
                 return
@@ -2591,7 +2898,7 @@ if GUI_AVAILABLE:
                     return
 
                 commit_msg = (
-                    f"auto: 작업 완료 ({self.current_service_type}) "
+                    f"auto: 작업 완료 ({service}) "
                     f"total={result.get('total', 0)} success={result.get('success', 0)} "
                     f"errors={result.get('errors', 0)} scheduled={result.get('scheduled', 0)} "
                     f"at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
@@ -2612,17 +2919,35 @@ def run_gui() -> int:
     if not GUI_AVAILABLE:
         print("PyQt6 is not installed. Run: pip install PyQt6")
         return 1
-    if not LICENSE_CHECK_AVAILABLE:
-        print("license_check module is missing. Cannot start without machine ID license verification.")
-        return 1
     app = QApplication(sys.argv)
-    icon_path = os.path.join(SCRIPT_DIR, "david153.ico")
-    if os.path.exists(icon_path):
-        app.setWindowIcon(QIcon(icon_path))
+    src = _window_icon_source()
+    if src:
+        app.setWindowIcon(QIcon(src))
+    startup_dialog = QDialog()
+    startup_dialog.setWindowTitle("안내")
+    _apply_window_icon(startup_dialog)
+    startup_dialog.setModal(False)
+    startup_dialog.setFixedSize(360, 130)
+    startup_layout = QVBoxLayout(startup_dialog)
+    startup_layout.setContentsMargins(18, 16, 18, 16)
+    startup_label = QLabel("프로그램 실행 중입니다.\n잠시만 기다려 주세요.")
+    startup_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    startup_layout.addWidget(startup_label)
+    startup_dialog.show()
+    QApplication.processEvents()
+    if not LICENSE_CHECK_AVAILABLE:
+        startup_dialog.close()
+        QMessageBox.critical(
+            None,
+            "필수 모듈 누락",
+            "license_check.py 모듈을 불러오지 못했습니다.\n머신 ID 검증 없이 실행할 수 없습니다.",
+        )
+        return 1
     try:
         lm = LicenseManager()
         ok, msg = lm.verify_license()
         if not ok:
+            startup_dialog.close()
             machine_id = lm.get_machine_id()
             full_message = f"{msg}\n\n현재 머신 ID:\n{machine_id}"
             if "등록되지 않은 컴퓨터" in msg:
@@ -2639,8 +2964,10 @@ def run_gui() -> int:
         except Exception:
             usage_period_text = "확인 필요"
     except Exception as e:
+        startup_dialog.close()
         QMessageBox.critical(None, "라이선스 오류", f"라이선스 확인 중 오류가 발생했습니다.\n{e}")
         return 1
+    startup_dialog.close()
     w = ModernIndexingGUI(usage_period_text=usage_period_text)
     w.showMaximized()
     try:

@@ -17,6 +17,9 @@ import re
 
 class LicenseManager:
     MACHINE_ID_PREFIX = "Indexing-"
+    MACHINE_ID_VERSION = "v2"
+    MACHINE_ID_PEPPER = "AutoIndexing-MID-2026-03"
+    FORCE_ROTATE_MACHINE_ID_ONCE = True
     """라이선스 관리자 클래스 - Google Spreadsheet 연동"""
 
     # Google Spreadsheet ID
@@ -27,6 +30,8 @@ class LicenseManager:
         self.base_dir = self._get_base_dir()
         self.state_dir = self._get_state_dir()
         self.license_file = os.path.join(self.state_dir, "license.json")
+        self.rotation_marker_file = os.path.join(self.state_dir, f"machine_id_rotated_{self.MACHINE_ID_VERSION}.flag")
+        self._cleanup_legacy_machine_id_files()
         self.license_data = self.load_license()
 
     def _get_base_dir(self):
@@ -53,6 +58,35 @@ class LicenseManager:
                     except Exception:
                         continue
         return os.path.join(self.base_dir, "setting")
+
+    def _legacy_machine_id_paths(self):
+        paths = [
+            os.path.join(self.base_dir, "setting", "machine_id.txt"),
+            os.path.join(self.state_dir, "machine_id.txt"),
+        ]
+        if platform.system() == "Windows":
+            programdata = os.getenv("PROGRAMDATA", "").strip()
+            if programdata:
+                paths.append(os.path.join(programdata, "Auto_indexing", "machine_id.txt"))
+        # 중복 제거
+        deduped = []
+        seen = set()
+        for p in paths:
+            key = os.path.normcase(os.path.abspath(p))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(p)
+        return deduped
+
+    def _cleanup_legacy_machine_id_files(self):
+        """더 이상 사용하지 않는 machine_id.txt 정리"""
+        for path in self._legacy_machine_id_paths():
+            try:
+                if os.path.isfile(path):
+                    os.remove(path)
+            except Exception:
+                pass
 
     def _normalize_identifier(self, value):
         """식별자 정규화: 영숫자만 소문자로 유지"""
@@ -217,27 +251,6 @@ class LicenseManager:
         except Exception:
             return ""
 
-    def _machine_id_paths(self):
-        """머신 ID 파일 후보 경로 목록 (우선순위 순)"""
-        paths = [
-            os.path.join(self.state_dir, "machine_id.txt"),
-            os.path.join(self.base_dir, "setting", "machine_id.txt"),
-        ]
-        if platform.system() == "Windows":
-            programdata = os.getenv("PROGRAMDATA", "").strip()
-            if programdata:
-                paths.append(os.path.join(programdata, "Auto_indexing", "machine_id.txt"))
-        # 중복 제거(순서 유지)
-        deduped = []
-        seen = set()
-        for p in paths:
-            key = os.path.normcase(os.path.abspath(p))
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(p)
-        return deduped
-
     def _is_valid_machine_id(self, value):
         return bool(self._normalize_machine_id(value))
 
@@ -266,32 +279,59 @@ class LicenseManager:
         return f"{self.MACHINE_ID_PREFIX}{hex_part}"
 
     def _read_first_saved_machine_id(self):
+        """저장된 머신 ID 재사용 (레지스트리만 사용)"""
         registry_saved = self._read_machine_id_from_registry()
         if registry_saved:
             return registry_saved
-        for path in self._machine_id_paths():
-            try:
-                if os.path.exists(path):
-                    with open(path, "r", encoding="utf-8") as f:
-                        saved = self._normalize_machine_id(f.read())
-                    if saved:
-                        return saved
-            except Exception:
-                continue
         return ""
 
     def _persist_machine_id(self, machine_id):
+        """머신 ID 저장 (레지스트리만 사용)"""
         self._persist_machine_id_to_registry(machine_id)
-        for path in self._machine_id_paths():
-            try:
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(machine_id)
-            except Exception:
-                continue
+
+    def _should_force_rotate_machine_id(self):
+        if not self.FORCE_ROTATE_MACHINE_ID_ONCE:
+            return False
+        return not os.path.exists(self.rotation_marker_file)
+
+    def _mark_machine_id_rotation_done(self):
+        try:
+            os.makedirs(os.path.dirname(self.rotation_marker_file), exist_ok=True)
+            with open(self.rotation_marker_file, "w", encoding="utf-8") as f:
+                f.write(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        except Exception:
+            pass
+
+    def _generate_machine_id(self):
+        """고정 규칙 기반 머신 ID 생성"""
+        # 우선순위: MachineGuid > SMBIOS UUID > MAC 기반 UUID 노드
+        machine_guid = self.get_windows_machine_guid()
+        win_id = self.get_windows_machine_id()
+        node_id = self._get_stable_uuid_node()
+        source = machine_guid or win_id or node_id
+        if not source:
+            source = self._normalize_identifier(platform.node()) or "unknown"
+
+        payload = f"{self.MACHINE_ID_VERSION}|{self.MACHINE_ID_PEPPER}|{source}"
+        return f"{self.MACHINE_ID_PREFIX}{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:32]}"
 
     def get_machine_id(self):
-        """머신 고유 ID 생성/로드 (최초 생성 후 고정)"""
+        """머신 고유 ID 생성/로드 (고정 알고리즘 + 최초 생성 후 고정)"""
+        # 0) 기존 값 무시 후 1회 강제 교체
+        if self._should_force_rotate_machine_id():
+            machine_id = self._generate_machine_id()
+            try:
+                self._persist_machine_id(machine_id)
+            except Exception:
+                pass
+            try:
+                keep_key = str(self.license_data.get("license_key", "SPREADSHEET_VERIFIED")) if isinstance(self.license_data, dict) else "SPREADSHEET_VERIFIED"
+                self.save_license(keep_key, machine_id)
+            except Exception:
+                pass
+            self._mark_machine_id_rotation_done()
+            return machine_id
+
         # 0) 기존 license.json의 등록값이 유효하면 우선 재사용 (업데이트 시 마이그레이션)
         try:
             registered_raw = self.license_data.get("registered_machine_id", "") if isinstance(self.license_data, dict) else ""
@@ -307,24 +347,10 @@ class LicenseManager:
         if saved:
             return saved
 
-        # 2) 새 머신 ID 생성 (정규화된 하드웨어 식별자 조합)
-        machine_guid = self.get_windows_machine_guid()
-        win_id = self.get_windows_machine_id()
-        mac = self._get_stable_mac_identifier()
-        drive_serial = self._get_windows_system_drive_serial()
+        # 2) 새 머신 ID 생성 (고정 규칙)
+        machine_id = self._generate_machine_id()
 
-        parts = [part for part in (machine_guid, win_id, drive_serial, mac) if part]
-        if not parts:
-            parts = [
-                self._normalize_identifier(platform.node()),
-                self._normalize_identifier(platform.platform()),
-                self._normalize_identifier(platform.machine()),
-            ]
-
-        combined = "|".join(parts)
-        machine_id = f"{self.MACHINE_ID_PREFIX}{hashlib.sha256(combined.encode('utf-8')).hexdigest()[:32]}"
-
-        # 3) 새 ID 저장 (신규 경로 + 레거시 경로 모두)
+        # 3) 새 ID 저장
         try:
             self._persist_machine_id(machine_id)
         except Exception as e:
@@ -422,7 +448,7 @@ class LicenseManager:
         buyers = self.fetch_buyers_from_sheet()
 
         if not buyers:
-            return False, "구매자 정보를 불러올 수 없습니다. 인터넷 연결을 확인해주세요."
+            return False, "구매자 정보를 불러올 수 없습니다. 현재 머신 ID를 데이비에게 전달해주세요."
 
         current_machine_id = self._normalize_machine_id(current_machine_id)
         if not current_machine_id:
