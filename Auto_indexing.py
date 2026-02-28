@@ -32,7 +32,6 @@ NAVER_QUOTA_FILE = os.path.join(SETTING_DIR, "naver_quota.json")
 URL_STATE_DB_FILE = os.path.join(SETTING_DIR, "indexing_state.db")
 LOG_FILE = os.path.join(SETTING_DIR, "auto_indexing_log.txt")
 KAKAO_CONTACT_URL = "https://open.kakao.com/me/david0985"
-AUTO_GIT_REMOTE_URL = "https://github.com/angibeom0985-arch/Auto_indexing"
 
 
 def _migrate_legacy_runtime_files() -> None:
@@ -468,7 +467,7 @@ except Exception:
 try:
     from PyQt6.QtCore import QMetaObject, QThread, QTimer, Qt, QUrl, Q_ARG, pyqtSignal
     from PyQt6.QtGui import QDesktopServices, QFont, QIcon
-    from PyQt6.QtWidgets import QApplication, QComboBox, QDialog, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton, QTabWidget, QTextEdit, QVBoxLayout, QWidget
+    from PyQt6.QtWidgets import QApplication, QComboBox, QDialog, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton, QTabWidget, QTextBrowser, QTextEdit, QVBoxLayout, QWidget
     GUI_AVAILABLE = True
 except Exception:
     GUI_AVAILABLE = False
@@ -495,9 +494,14 @@ class IndexingLogger:
         self.gui_widgets = [widget] if widget else []
 
     def log(self, message: str, level: str = "INFO"):
-        normalized = self._normalize_message(message)
-        if normalized is None:
-            return
+        raw_message = str(message or "").strip()
+        is_rich = "<a " in raw_message.lower()
+        if is_rich:
+            normalized = raw_message
+        else:
+            normalized = self._normalize_message(message)
+            if normalized is None:
+                return
         # Keep exactly one leading icon in GUI logs.
         while normalized and normalized[0] in ("ℹ", "ℹ️", "⚠", "⚠️", "❌", "✅", "🔍", "📋", "📌", "🛠", "🚀"):
             normalized = normalized[1:].lstrip("️ ").strip()
@@ -512,7 +516,8 @@ class IndexingLogger:
         }
         icon = icon_map.get(level_text, "ℹ️")
         line = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {icon} {normalized}"
-        print(line)
+        plain_line = re.sub(r"<[^>]+>", "", line) if is_rich else line
+        print(plain_line)
         for w in self.gui_widgets:
             try:
                 if GUI_AVAILABLE:
@@ -528,7 +533,7 @@ class IndexingLogger:
                 pass
         try:
             with open(LOG_FILE, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
+                f.write(plain_line + "\n")
         except Exception:
             pass
 
@@ -1920,10 +1925,11 @@ if GUI_AVAILABLE:
             self.setMinimumHeight(36)
             self.setFont(QFont("맑은 고딕", 10))
 
-    class GlassTextEdit(QTextEdit):
+    class GlassTextEdit(QTextBrowser):
         def __init__(self, parent=None):
             super().__init__(parent)
             self.setFont(QFont("맑은 고딕", 11))
+            self.setOpenExternalLinks(True)
 
     class IndexingWorker(QThread):
         progress_updated = pyqtSignal(str, int)
@@ -2541,8 +2547,7 @@ if GUI_AVAILABLE:
             self._set_running(False)
             self.progress_bar.setValue(100)
             self.status_label.setText("완료")
-            self._append_log(self.current_service_type, f"완료 - 전체={result.get('total', 0)}, 성공={result.get('success', 0)}, 오류={result.get('errors', 0)}, 예약={result.get('scheduled', 0)}")
-            self._auto_commit_push_async(result)
+            self._auto_commit_async(result)
             service_label = "구글" if self.current_service_type == "google" else "네이버"
             self._show_brief_notice(f"{service_label} 작업이 완료되었습니다.")
             self.worker = None
@@ -2559,34 +2564,19 @@ if GUI_AVAILABLE:
             )
 
         def _find_git_repo_dir(self) -> Optional[str]:
-            # 1) explicit override
-            explicit = os.getenv("AUTO_INDEXING_GIT_REPO_DIR", "").strip()
-            if explicit and os.path.isdir(os.path.join(explicit, ".git")):
-                return explicit
-            # 2) likely project roots
             for base in [APP_BASE_DIR, SCRIPT_DIR, os.path.dirname(APP_BASE_DIR), os.path.dirname(SCRIPT_DIR)]:
                 if base and os.path.isdir(os.path.join(base, ".git")):
                     return base
             return None
 
-        def _auto_commit_push_async(self, result: Dict[str, int]):
-            Thread(target=self._auto_commit_push_worker, args=(result,), daemon=True).start()
+        def _auto_commit_async(self, result: Dict[str, int]):
+            Thread(target=self._auto_commit_worker, args=(result,), daemon=True).start()
 
-        def _auto_commit_push_worker(self, result: Dict[str, int]):
+        def _auto_commit_worker(self, result: Dict[str, int]):
             repo_dir = self._find_git_repo_dir()
             if not repo_dir:
-                self.controller.logger.log("자동 Git 커밋 건너뜀: .git 저장소를 찾을 수 없습니다.", "WARNING")
                 return
             try:
-                remote = self._run_git(repo_dir, ["remote", "get-url", "origin"])
-                remote_url = (remote.stdout or "").strip()
-                if remote.returncode != 0 or not remote_url:
-                    self.controller.logger.log("자동 Git 커밋 건너뜀: origin 원격 저장소를 확인할 수 없습니다.", "WARNING")
-                    return
-                if "github.com/angibeom0985-arch/Auto_indexing" not in remote_url.replace(".git", ""):
-                    self.controller.logger.log(f"자동 Git 커밋 건너뜀: origin URL 불일치 ({remote_url})", "WARNING")
-                    return
-
                 add = self._run_git(repo_dir, ["add", "-A"])
                 if add.returncode != 0:
                     self.controller.logger.log(f"자동 Git add 실패: {(add.stderr or add.stdout).strip()}", "ERROR")
@@ -2598,7 +2588,6 @@ if GUI_AVAILABLE:
                     return
                 changed_files = [ln.strip() for ln in (staged.stdout or "").splitlines() if ln.strip()]
                 if not changed_files:
-                    self.controller.logger.log("자동 Git 커밋 건너뜀: 변경 파일이 없습니다.", "INFO")
                     return
 
                 commit_msg = (
@@ -2611,16 +2600,10 @@ if GUI_AVAILABLE:
                 if commit.returncode != 0:
                     out = (commit.stderr or commit.stdout or "").strip()
                     if "nothing to commit" in out.lower():
-                        self.controller.logger.log("자동 Git 커밋 건너뜀: 커밋할 변경이 없습니다.", "INFO")
                         return
                     self.controller.logger.log(f"자동 Git commit 실패: {out}", "ERROR")
                     return
-
-                push = self._run_git(repo_dir, ["push", "origin", "HEAD"], timeout=120)
-                if push.returncode != 0:
-                    self.controller.logger.log(f"자동 Git push 실패: {(push.stderr or push.stdout).strip()}", "ERROR")
-                    return
-                self.controller.logger.log("자동 Git 커밋/푸시 완료", "SUCCESS")
+                self.controller.logger.log("자동 Git 커밋 완료", "SUCCESS")
             except Exception as e:
                 self.controller.logger.log(f"자동 Git 처리 실패: {e}", "ERROR")
 

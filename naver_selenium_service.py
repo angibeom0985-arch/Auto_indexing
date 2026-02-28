@@ -4,6 +4,7 @@
 import time
 import os
 import sys
+import html
 from threading import Event
 from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import unquote, urlsplit
@@ -68,6 +69,19 @@ class NaverSeleniumService:
         if decoded != "/" and decoded.endswith("/"):
             decoded = decoded.rstrip("/")
         return decoded
+
+    @staticmethod
+    def _display_date_only(value: str) -> str:
+        raw = (value or "").strip()
+        if not raw:
+            return "날짜없음"
+        if len(raw) >= 10 and raw[4:5] == "-" and raw[7:8] == "-":
+            return raw[:10]
+        if "T" in raw:
+            head = raw.split("T", 1)[0].strip()
+            if len(head) == 10 and head[4:5] == "-" and head[7:8] == "-":
+                return head
+        return raw
 
     def wait_until_history_contains(
         self,
@@ -362,7 +376,6 @@ class NaverSeleniumService:
             except Exception:
                 pass
 
-            self.log("확인 버튼 클릭, 요청 내역 반영 확인 중", "INFO")
             if self.wait_until_history_contains(
                 url,
                 self.history_confirm_timeout_seconds,
@@ -419,9 +432,11 @@ class NaverSeleniumService:
                     skipped += 1
                     continue
                 m = meta.get(u, {}) or {}
-                pub = (m.get("published_at") or "").strip() or "날짜없음"
+                pub = self._display_date_only((m.get("published_at") or "").strip())
                 title = (m.get("title") or "").strip() or "제목없음"
-                self.log(f"{pub} | {title} | {u}", "INFO")
+                safe_title = html.escape(title)
+                safe_url = html.escape(u, quote=True)
+                self.log(f"{pub} | <a href=\"{safe_url}\">{safe_title}</a>", "INFO")
                 if u in already:
                     skipped += 1
                     continue
