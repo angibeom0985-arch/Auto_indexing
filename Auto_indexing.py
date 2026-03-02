@@ -2239,7 +2239,7 @@ if GUI_AVAILABLE:
             self.google_key_extra_rows: List[Dict[str, Any]] = []
             grid.addWidget(self.google_key_extra_widget, 1, 1)
             layout.addWidget(settings)
-            seeds = QGroupBox("색인 요청할 사이트 URL")
+            seeds = QGroupBox("색인 요청할 도메인 URL")
             s = QVBoxLayout(seeds)
             self.google_seed_rows: List[Dict[str, Any]] = []
             self.google_seed_urls_widget = QWidget()
@@ -2308,7 +2308,7 @@ if GUI_AVAILABLE:
             self.naver_settings_save_btn.clicked.connect(lambda: self._run_action_with_notice(self.save_all_configs, "저장이 완료되었습니다."))
             row.addWidget(self.naver_settings_save_btn)
             layout.addWidget(settings)
-            seed_group = QGroupBox("색인 요청할 사이트 URL")
+            seed_group = QGroupBox("색인 요청할 도메인 URL")
             sd = QVBoxLayout(seed_group)
             self.naver_seed_rows: List[Dict[str, Any]] = []
             self.naver_seed_urls_widget = QWidget()
@@ -2772,7 +2772,7 @@ if GUI_AVAILABLE:
                   <p style="margin:0 0 7px 0;">- <b>+추가</b>: 이미 등록된 목록에 JSON 파일을 더 붙입니다.</p>
                   <p style="margin:0 0 7px 0;">- <b>삭제</b>: 등록된 JSON 목록을 비웁니다.</p>
                   <p style="margin:0 0 14px 0;">- 발급이 어려우면 <a href="help://google-key" style="color:#38bdf8; text-decoration:underline;"><b>구글 인증 키 발급 방법</b></a>을 눌러 상세 안내를 보세요.</p>
-                  <h3 style="font-size:17px; margin:0 0 10px 0;">[색인 요청할 사이트 URL]</h3>
+                  <h3 style="font-size:17px; margin:0 0 10px 0;">[색인 요청할 도메인 URL]</h3>
                   <p style="margin:0 0 7px 0;">- 색인할 사이트의 <b>도메인 URL</b>을 입력합니다. 예) https://example.com</p>
                   <p style="margin:0 0 7px 0;">- 사이트가 여러 개면 <b>+ 추가</b>로 칸을 늘려 각각 입력합니다.</p>
                   <p style="margin:0 0 14px 0;">- 각 URL 오른쪽에서 사이트별로 <b>요청 순서</b>를 고를 수 있습니다.<br>(가장 오래된 글부터 / 가장 최신 글부터)</p>
@@ -2800,7 +2800,7 @@ if GUI_AVAILABLE:
                   <h3 style="font-size:17px; margin:0 0 10px 0;">[네이버 계정 설정]</h3>
                   <p style="margin:0 0 7px 0;">- <b>네이버 로그인 아이디</b>: 사이트를 등록한 네이버 계정 아이디</p>
                   <p style="margin:0 0 14px 0;">- <b>네이버 비밀번호</b>: 해당 계정 비밀번호 (공개/비공개 버튼 지원)</p>
-                  <h3 style="font-size:17px; margin:0 0 10px 0;">[색인 요청할 사이트 URL]</h3>
+                  <h3 style="font-size:17px; margin:0 0 10px 0;">[색인 요청할 도메인 URL]</h3>
                   <p style="margin:0 0 7px 0;">- 색인할 사이트의 <b>도메인 URL</b>을 입력합니다. 예) https://example.com</p>
                   <p style="margin:0 0 7px 0;">- 여러 사이트를 쓰면 <b>+ 추가</b>로 칸을 늘려 입력합니다.</p>
                   <p style="margin:0 0 14px 0;">- 각 URL 오른쪽에서 사이트별로 <b>요청 순서</b>를 고를 수 있습니다.<br>(가장 오래된 글부터 / 가장 최신 글부터)</p>
@@ -3041,3 +3041,4 @@ if __name__ == "__main__":
         sys.exit(run_gui())
     except KeyboardInterrupt:
         sys.exit(0)
+
