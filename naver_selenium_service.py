@@ -251,6 +251,37 @@ class NaverSeleniumService:
         except Exception:
             return ""
 
+    def _find_link_by_target_url(self, target_site_url: str):
+        drv = self._driver()
+        target_key = self._site_key(self._norm_site(target_site_url))
+        js = """
+        const target = arguments[0];
+        const anchors = Array.from(document.querySelectorAll("a[href], a"));
+        const normalize = (v) => {
+          let s = (v || "").trim().toLowerCase();
+          s = s.replace(/^https?:\\/\\//, "").replace(/\\/$/, "");
+          return s;
+        };
+        for (const a of anchors) {
+          const txt = normalize(a.textContent || "");
+          const href = a.getAttribute("href") || "";
+          let site = "";
+          try {
+            const u = new URL(href, location.origin);
+            site = normalize(u.searchParams.get("site") || "");
+          } catch (_) {}
+          const hrefNorm = normalize(href);
+          if (txt === target || site === target || hrefNorm.includes(target)) {
+            return a;
+          }
+        }
+        return null;
+        """
+        try:
+            return drv.execute_script(js, target_key)
+        except Exception:
+            return None
+
     def select_site_from_list(self, target_site_url: str) -> bool:
         try:
             drv = self._driver()
@@ -296,6 +327,16 @@ class NaverSeleniumService:
                     time.sleep(1.0)
                     self.log(f"대상 사이트 선택 완료: {target}", "SUCCESS")
                     return True
+
+            # Fallback: scan entire DOM for an anchor that matches user-entered URL.
+            dom_link = self._find_link_by_target_url(target)
+            if dom_link is not None:
+                drv.execute_script("arguments[0].scrollIntoView({block:'center'});", dom_link)
+                time.sleep(0.1)
+                drv.execute_script("arguments[0].click();", dom_link)
+                time.sleep(1.0)
+                self.log(f"대상 사이트 선택 완료(DOM 검색): {target}", "SUCCESS")
+                return True
 
             preview = []
             for link in links[:5]:
