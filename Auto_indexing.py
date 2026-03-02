@@ -2525,6 +2525,7 @@ if GUI_AVAILABLE:
 
         def _on_error_logged(self, service: str, message: str):
             error_text = self._strip_error_line(message)
+            self._append_log(service, f"❌ 오류 원문: {error_text}")
             tip = self._resolve_troubleshooting_tip(service, error_text)
             self._append_log(service, f"🛠 해결 방법: {tip}")
             david_message = self._build_david_message(service, error_text, tip)
