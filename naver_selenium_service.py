@@ -28,6 +28,7 @@ class NaverSeleniumService:
         self.submit_interval_seconds = 0.0
         self.history_confirm_timeout_seconds = 25.0
         self.daily_quota_reached = False
+        self.session_disconnected = False
         script_dir = os.path.dirname(os.path.abspath(__file__))
         app_base_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else script_dir
         setting_dir = os.path.join(app_base_dir, "setting")
@@ -432,6 +433,7 @@ class NaverSeleniumService:
 
     def submit_single_url(self, url: str, stop_event: Optional[Event] = None) -> bool:
         try:
+            self.session_disconnected = False
             drv = self._driver()
             wait = self._wait()
             self.log(f"색인 요청 URL 입력: {url}", "INFO")
@@ -486,8 +488,44 @@ class NaverSeleniumService:
             self.log(f"요청 내역 반영 확인 실패: {url}", "WARNING")
             return False
         except Exception as e:
+            low = str(e).lower()
+            if (
+                "httpconnectionpool(host='localhost'" in low
+                or "max retries exceeded with url: /session/" in low
+                or "failed to establish a new connection" in low
+                or "connection refused" in low
+                or "winerror 10061" in low
+                or "invalid session id" in low
+            ):
+                self.session_disconnected = True
             self.log(f"단일 URL 제출 실패: {e}", "ERROR")
             return False
+
+    def _recover_disconnected_session(self, username: str, password: str, site_url: str) -> bool:
+        self.log("브라우저 세션이 끊겨 자동 복구를 시도합니다.", "WARNING")
+        try:
+            self.cleanup()
+        except Exception:
+            pass
+        self.driver = None
+        self.wait = None
+        self.session_disconnected = False
+
+        if not self.setup_driver():
+            self.log("세션 자동 복구 실패: 드라이버 재시작 실패", "ERROR")
+            return False
+        if not self.login_naver(username, password):
+            self.log("세션 자동 복구 실패: 로그인 실패", "ERROR")
+            return False
+        if not self.navigate_to_search_advisor(site_url):
+            self.log("세션 자동 복구 실패: 사이트 선택 실패", "ERROR")
+            return False
+        if not self.navigate_to_crawl_request_page():
+            self.log("세션 자동 복구 실패: 웹 페이지 수집 화면 진입 실패", "ERROR")
+            return False
+
+        self.log("세션 자동 복구 완료", "SUCCESS")
+        return True
 
     def submit_urls_for_crawling(
         self,
@@ -496,6 +534,8 @@ class NaverSeleniumService:
         url_meta: Optional[Dict[str, Dict[str, str]]] = None,
         stop_event: Optional[Event] = None,
         submit_order: str = "oldest",
+        username: str = "",
+        password: str = "",
     ) -> Tuple[int, int]:
         success = 0
         failed = 0
@@ -548,6 +588,21 @@ class NaverSeleniumService:
                 else:
                     if self.daily_quota_reached:
                         break
+                    recovered = False
+                    if (
+                        self.session_disconnected
+                        and site_url
+                        and username
+                        and password
+                        and not (stop_event and stop_event.is_set())
+                    ):
+                        recovered = self._recover_disconnected_session(username, password, site_url)
+                        if recovered and self.submit_single_url(u, stop_event=stop_event):
+                            success += 1
+                            already.add(u)
+                            continue
+                    if self.session_disconnected and not recovered:
+                        self.log("세션 복구 실패로 현재 URL을 실패 처리합니다.", "ERROR")
                     failed += 1
 
             self.log(f"네이버 제출 완료: 성공 {success}개 | 실패 {failed}개 | 건너뜀 {skipped}개", "SUCCESS")

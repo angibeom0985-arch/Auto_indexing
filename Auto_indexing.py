@@ -1656,6 +1656,8 @@ class NaverIndexingService:
                         {u: url_meta.get(u, {}) for u in proc_bucket},
                         stop_event=stop_event,
                         submit_order=submit_order,
+                        username=username,
+                        password=password,
                     )
                     succ += s
                     fail += f
