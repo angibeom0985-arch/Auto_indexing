@@ -1841,7 +1841,6 @@ class IndexingController:
 
                 site_crawled, site_dates, site_titles = self.url_manager.crawl_site(
                     site,
-                    max_urls=site_remaining,
                     submit_order=site_order_map.get(site.rstrip("/"), default_order),
                 )
                 if not site_crawled:
@@ -1850,8 +1849,6 @@ class IndexingController:
                 site_crawled = self._filter_submission_targets(site_crawled, "네이버")
                 if not site_crawled:
                     continue
-                if len(site_crawled) > site_remaining:
-                    site_crawled = site_crawled[:site_remaining]
                 site_dates = {u: site_dates[u] for u in site_crawled if u in site_dates}
                 site_titles = {u: site_titles[u] for u in site_crawled if u in site_titles}
                 self.url_state.upsert_seen_urls(site_crawled, site_dates, site_titles)
