@@ -7,7 +7,7 @@ import sys
 import html
 from threading import Event
 from typing import Dict, List, Optional, Set, Tuple
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -230,27 +230,84 @@ class NaverSeleniumService:
     def _norm_site(url: str) -> str:
         return (url or "").strip().rstrip("/").replace("http://", "https://")
 
+    @staticmethod
+    def _site_key(url: str) -> str:
+        raw = (url or "").strip().lower().rstrip("/")
+        if raw.startswith("https://"):
+            raw = raw[len("https://") :]
+        elif raw.startswith("http://"):
+            raw = raw[len("http://") :]
+        return raw
+
+    @staticmethod
+    def _extract_site_from_href(href: str) -> str:
+        val = (href or "").strip()
+        if not val:
+            return ""
+        try:
+            q = parse_qs(urlsplit(val).query or "")
+            site = (q.get("site") or [""])[0]
+            return site.strip()
+        except Exception:
+            return ""
+
     def select_site_from_list(self, target_site_url: str) -> bool:
         try:
             drv = self._driver()
-            wait = self._wait()
             target = self._norm_site(target_site_url)
+            target_key = self._site_key(target)
             self.log(f"대상 사이트 선택 시도: {target}", "INFO")
-            links = wait.until(
-                EC.presence_of_all_elements_located(
-                    (By.CSS_SELECTOR, "a.d-block.secondary--text.text--darken-2.api_link")
-                )
-            )
+            css_candidates = [
+                "a[href*='/console/site/dashboard?site=']",
+                "a[href*='/console/site/request/crawl?site=']",
+                "a.api_link",
+                "a[href*='site=']",
+            ]
+            end_at = time.time() + 12.0
+            links = []
+            while time.time() < end_at:
+                merged = []
+                seen = set()
+                for css in css_candidates:
+                    try:
+                        for el in drv.find_elements(By.CSS_SELECTOR, css):
+                            key = el.id
+                            if key not in seen:
+                                merged.append(el)
+                                seen.add(key)
+                    except Exception:
+                        continue
+                if merged:
+                    links = merged
+                    break
+                time.sleep(0.35)
+
+            if not links:
+                self.log("사이트 목록 링크를 찾지 못했습니다. 보드 DOM 구조 변경 가능성이 있습니다.", "ERROR")
+                return False
+
             for link in links:
-                text = self._norm_site((link.text or ""))
-                if text == target:
+                text_site = self._norm_site((link.text or ""))
+                href_site = self._norm_site(self._extract_site_from_href(link.get_attribute("href") or ""))
+                if target_key in {self._site_key(text_site), self._site_key(href_site)}:
+                    drv.execute_script("arguments[0].scrollIntoView({block:'center'});", link)
+                    time.sleep(0.1)
                     drv.execute_script("arguments[0].click();", link)
                     time.sleep(1.0)
                     self.log(f"대상 사이트 선택 완료: {target}", "SUCCESS")
                     return True
+
+            preview = []
+            for link in links[:5]:
+                txt = (link.text or "").strip()
+                href_site = self._extract_site_from_href(link.get_attribute("href") or "")
+                if txt or href_site:
+                    preview.append(f"text='{txt}' site='{href_site}'")
+            if preview:
+                self.log("감지된 사이트 후보(일부): " + " | ".join(preview), "WARNING")
             return False
         except Exception as e:
-            self.log(f"사이트 선택 실패: {e}", "ERROR")
+            self.log(f"사이트 선택 실패 ({type(e).__name__}): {e!r}", "ERROR")
             return False
 
     def navigate_to_search_advisor(self, site_url: str) -> bool:
