@@ -5,15 +5,14 @@ import json
 import os
 import re
 import sqlite3
-import subprocess
 import sys
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from email.utils import parsedate_to_datetime
-from threading import Event, Thread
-from typing import Any, Dict, List, Optional, Set, Tuple
+from threading import Event
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import unquote, urldefrag, urljoin, urlparse, urlsplit, urlunsplit
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -506,10 +505,14 @@ except Exception:
 class IndexingLogger:
     def __init__(self):
         self.gui_widgets: List[Any] = []
+        self.error_callback: Optional[Callable[[str], None]] = None
         os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 
     def set_gui_log_widget(self, widget):
         self.gui_widgets = [widget] if widget else []
+
+    def set_error_callback(self, callback: Optional[Callable[[str], None]]) -> None:
+        self.error_callback = callback
 
     def log(self, message: str, level: str = "INFO"):
         raw_message = str(message or "").strip()
@@ -536,6 +539,11 @@ class IndexingLogger:
         line = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {icon} {normalized}"
         plain_line = re.sub(r"<[^>]+>", "", line) if is_rich else line
         print(plain_line)
+        if level_text == "ERROR" and callable(self.error_callback):
+            try:
+                self.error_callback(plain_line)
+            except Exception:
+                pass
         for w in self.gui_widgets:
             try:
                 if GUI_AVAILABLE:
@@ -2010,22 +2018,29 @@ if GUI_AVAILABLE:
             self.service_type = service_type
 
         def run(self):
-            if self.service_type == "google":
-                r = self.controller.run_indexing(
-                    progress_callback=lambda m, p: self.progress_updated.emit("google", m, p),
-                    google_urls=self.urls,
-                    service_to_run="google",
-                )
-                self.finished.emit("google", {"total": r.get("total", 0), "success": r.get("google_success", 0), "errors": r.get("errors", 0), "scheduled": r.get("scheduled", 0)})
-            else:
-                r = self.controller.run_indexing(
-                    progress_callback=lambda m, p: self.progress_updated.emit("naver", m, p),
-                    naver_urls=self.urls,
-                    service_to_run="naver",
-                )
-                self.finished.emit("naver", {"total": r.get("total", 0), "success": r.get("naver_success", 0), "errors": r.get("errors", 0), "scheduled": r.get("scheduled", 0)})
+            try:
+                if self.service_type == "google":
+                    r = self.controller.run_indexing(
+                        progress_callback=lambda m, p: self.progress_updated.emit("google", m, p),
+                        google_urls=self.urls,
+                        service_to_run="google",
+                    )
+                    self.finished.emit("google", {"total": r.get("total", 0), "success": r.get("google_success", 0), "errors": r.get("errors", 0), "scheduled": r.get("scheduled", 0)})
+                else:
+                    r = self.controller.run_indexing(
+                        progress_callback=lambda m, p: self.progress_updated.emit("naver", m, p),
+                        naver_urls=self.urls,
+                        service_to_run="naver",
+                    )
+                    self.finished.emit("naver", {"total": r.get("total", 0), "success": r.get("naver_success", 0), "errors": r.get("errors", 0), "scheduled": r.get("scheduled", 0)})
+            except Exception as e:
+                service_label = "구글" if self.service_type == "google" else "네이버"
+                self.controller.logger.log(f"{service_label} 작업 중 예외가 발생했습니다: {type(e).__name__}: {e}", "ERROR")
+                self.finished.emit(self.service_type, {"total": 0, "success": 0, "errors": 1, "scheduled": 0})
 
     class ModernIndexingGUI(QMainWindow):
+        error_logged = pyqtSignal(str, str)
+
         def __init__(self, usage_period_text: str = "확인 필요"):
             super().__init__()
             self.controller = IndexingController()
@@ -2034,6 +2049,9 @@ if GUI_AVAILABLE:
             self.current_config = self.controller.config_manager.default_config.copy()
             self.usage_period_text = usage_period_text
             self._notice_boxes: List[QMessageBox] = []
+            self._david_message_boxes: Dict[str, QTextEdit] = {}
+            self._david_copy_buttons: Dict[str, GlassButton] = {}
+            self.error_logged.connect(self._on_error_logged)
             self.init_ui()
             if not self.initialize_encryption_and_load_config():
                 QTimer.singleShot(100, self.close)
@@ -2254,6 +2272,7 @@ if GUI_AVAILABLE:
             self.google_log.textChanged.connect(lambda: self._scroll_log_to_bottom(self.google_log))
             self.google_log.anchorClicked.connect(self._handle_log_link_clicked)
             gl.addWidget(self.google_log)
+            gl.addWidget(self._create_david_message_panel("google"))
             split_row = QHBoxLayout()
             split_row.setSpacing(12)
             split_row.addWidget(seeds, 1)
@@ -2322,6 +2341,7 @@ if GUI_AVAILABLE:
             self.naver_log.textChanged.connect(lambda: self._scroll_log_to_bottom(self.naver_log))
             self.naver_log.anchorClicked.connect(self._handle_log_link_clicked)
             nl.addWidget(self.naver_log)
+            nl.addWidget(self._create_david_message_panel("naver"))
             split_row = QHBoxLayout()
             split_row.setSpacing(12)
             split_row.addWidget(seed_group, 1)
@@ -2375,11 +2395,22 @@ if GUI_AVAILABLE:
             if service == "google":
                 self.google_seed_rows.append({"widget": row_widget, "input": inp, "order": order_combo})
                 self.google_seed_urls_layout.addWidget(row_widget)
-                QTimer.singleShot(0, lambda: self.google_seed_scroll.verticalScrollBar().setValue(self.google_seed_scroll.verticalScrollBar().maximum()))
+                QTimer.singleShot(0, lambda: self._scroll_seed_to_bottom("google"))
             else:
                 self.naver_seed_rows.append({"widget": row_widget, "input": inp, "order": order_combo})
                 self.naver_seed_urls_layout.addWidget(row_widget)
-                QTimer.singleShot(0, lambda: self.naver_seed_scroll.verticalScrollBar().setValue(self.naver_seed_scroll.verticalScrollBar().maximum()))
+                QTimer.singleShot(0, lambda: self._scroll_seed_to_bottom("naver"))
+
+        def _scroll_seed_to_bottom(self, service: str):
+            scroll = self.google_seed_scroll if service == "google" else self.naver_seed_scroll
+            sb = getattr(scroll, "verticalScrollBar", None)
+            if callable(sb):
+                bar = sb()
+                if bar is not None:
+                    maximum_fn = getattr(bar, "maximum", None)
+                    set_value_fn = getattr(bar, "setValue", None)
+                    if callable(maximum_fn) and callable(set_value_fn):
+                        set_value_fn(maximum_fn())
 
         def _set_seed_items(self, service: str, items: List[Dict[str, str]]):
             rows = self.google_seed_rows if service == "google" else self.naver_seed_rows
@@ -2420,6 +2451,90 @@ if GUI_AVAILABLE:
             target = self.google_log if service == "google" else self.naver_log
             target.append(message)
             self._scroll_log_to_bottom(target)
+
+        def _create_david_message_panel(self, service: str) -> QWidget:
+            panel = QWidget()
+            panel_layout = QVBoxLayout(panel)
+            panel_layout.setContentsMargins(0, 8, 0, 0)
+            panel_layout.setSpacing(6)
+            panel_layout.addWidget(QLabel("오류 발생 시 데이비에게 전달할 메시지"))
+            box = QTextEdit()
+            box.setReadOnly(True)
+            box.setMinimumHeight(96)
+            box.setPlaceholderText("오류가 발생하면 여기에 전달 메시지가 자동 생성됩니다.")
+            panel_layout.addWidget(box, 1)
+            row = QHBoxLayout()
+            row.addStretch(1)
+            copy_btn = GlassButton("복사", "secondary")
+            copy_btn.clicked.connect(lambda: self._copy_david_message(service))
+            row.addWidget(copy_btn, 0)
+            panel_layout.addLayout(row)
+            self._david_message_boxes[service] = box
+            self._david_copy_buttons[service] = copy_btn
+            return panel
+
+        def _copy_david_message(self, service: str) -> bool:
+            box = self._david_message_boxes.get(service)
+            if box is None:
+                return False
+            text = box.toPlainText().strip()
+            if not text:
+                self._show_brief_notice("복사할 전달 메시지가 없습니다.")
+                return False
+            clipboard = QApplication.clipboard()
+            if clipboard is None:
+                return False
+            clipboard.setText(text)
+            btn = self._david_copy_buttons.get(service)
+            if btn is not None:
+                btn.setText("복사됨")
+                QTimer.singleShot(900, lambda b=btn: b.setText("복사"))
+            self._show_brief_notice("데이비 전달 메시지를 복사했습니다.")
+            return True
+
+        def _service_label(self, service: str) -> str:
+            return "구글" if service == "google" else "네이버"
+
+        def _strip_error_line(self, message: str) -> str:
+            text = str(message or "").strip()
+            text = re.sub(r"^\[[^\]]+\]\s*", "", text)
+            text = re.sub(r"^[❌⚠️ℹ️✅\s]+", "", text)
+            return text or "오류 메시지를 확인할 수 없습니다."
+
+        def _resolve_troubleshooting_tip(self, service: str, error_text: str) -> str:
+            low = error_text.lower()
+            if "service account file not found" in low or ("json" in low and "not found" in low):
+                return "JSON 키 파일 경로를 다시 확인하고 파일이 실제로 존재하는지 점검하세요."
+            if "google api library missing" in low:
+                return "환경에 google-api-python-client, google-auth를 설치한 뒤 프로그램을 재실행하세요."
+            if "quota" in low or "할당량" in error_text:
+                return "오늘 할당량을 확인하고, 남은 할당량이 없으면 다음 주기까지 대기하거나 계정을 추가하세요."
+            if service == "naver" and ("login" in low or "로그인" in error_text):
+                return "네이버 아이디/비밀번호와 서치어드바이저 등록 계정 일치 여부를 확인하고, 브라우저 추가 인증 여부를 점검하세요."
+            if "403" in low or "permission" in low or "권한" in error_text:
+                return "권한 설정을 점검하세요. 구글은 Search Console 사용자/권한 연결 상태를 확인하는 것이 우선입니다."
+            return "로그의 오류 원문을 확인한 뒤 설정 저장 후 재시도하세요. 동일하면 아래 메시지를 데이비에게 전달하세요."
+
+        def _build_david_message(self, service: str, error_text: str, tip: str) -> str:
+            return (
+                "[Auto_Indexing 오류 전달]\n"
+                f"- 발생 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"- 서비스: {self._service_label(service)}\n"
+                f"- 오류 내용: {error_text}\n"
+                f"- 1차 해결 방법: {tip}\n"
+                f"- 로그 파일 위치: {LOG_FILE}\n"
+                "- 위 내용 확인 부탁드립니다."
+            )
+
+        def _on_error_logged(self, service: str, message: str):
+            error_text = self._strip_error_line(message)
+            tip = self._resolve_troubleshooting_tip(service, error_text)
+            self._append_log(service, f"🛠 해결 방법: {tip}")
+            david_message = self._build_david_message(service, error_text, tip)
+            box = self._david_message_boxes.get(service)
+            if box is not None:
+                box.setPlainText(david_message)
+            self._append_log(service, "📋 데이비에게 전달할 메시지를 아래 박스에 생성했습니다. [복사] 버튼으로 바로 복사하세요.")
 
         def _handle_log_link_clicked(self, url: QUrl):
             u = (url.toString() or "").strip()
@@ -2787,6 +2902,7 @@ if GUI_AVAILABLE:
         def _new_runtime_controller(self, service: str) -> IndexingController:
             c = IndexingController()
             c.logger.set_gui_log_widget(self.google_log if service == "google" else self.naver_log)
+            c.logger.set_error_callback(lambda msg, svc=service: self.error_logged.emit(svc, msg))
             return c
 
         def start_google_indexing(self, silent: bool = False):
@@ -2851,68 +2967,12 @@ if GUI_AVAILABLE:
             self._set_service_running(service, False)
             self.progress_bar.setValue(100)
             self.status_label.setText("완료")
-            self._auto_commit_async(service, result)
             service_label = "구글" if service == "google" else "네이버"
             self._show_brief_notice(f"{service_label} 작업이 완료되었습니다.")
             if service == "google":
                 self.google_worker = None
             else:
                 self.naver_worker = None
-
-        @staticmethod
-        def _run_git(cwd: str, args: List[str], timeout: int = 45) -> subprocess.CompletedProcess:
-            return subprocess.run(
-                ["git"] + args,
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
-            )
-
-        def _find_git_repo_dir(self) -> Optional[str]:
-            for base in [APP_BASE_DIR, SCRIPT_DIR, os.path.dirname(APP_BASE_DIR), os.path.dirname(SCRIPT_DIR)]:
-                if base and os.path.isdir(os.path.join(base, ".git")):
-                    return base
-            return None
-
-        def _auto_commit_async(self, service: str, result: Dict[str, int]):
-            Thread(target=self._auto_commit_worker, args=(service, result), daemon=True).start()
-
-        def _auto_commit_worker(self, service: str, result: Dict[str, int]):
-            repo_dir = self._find_git_repo_dir()
-            if not repo_dir:
-                return
-            try:
-                add = self._run_git(repo_dir, ["add", "-A"])
-                if add.returncode != 0:
-                    self.controller.logger.log(f"자동 Git add 실패: {(add.stderr or add.stdout).strip()}", "ERROR")
-                    return
-
-                staged = self._run_git(repo_dir, ["diff", "--cached", "--name-only"])
-                if staged.returncode != 0:
-                    self.controller.logger.log(f"자동 Git 변경 확인 실패: {(staged.stderr or staged.stdout).strip()}", "ERROR")
-                    return
-                changed_files = [ln.strip() for ln in (staged.stdout or "").splitlines() if ln.strip()]
-                if not changed_files:
-                    return
-
-                commit_msg = (
-                    f"auto: 작업 완료 ({service}) "
-                    f"total={result.get('total', 0)} success={result.get('success', 0)} "
-                    f"errors={result.get('errors', 0)} scheduled={result.get('scheduled', 0)} "
-                    f"at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                )
-                commit = self._run_git(repo_dir, ["commit", "-m", commit_msg], timeout=90)
-                if commit.returncode != 0:
-                    out = (commit.stderr or commit.stdout or "").strip()
-                    if "nothing to commit" in out.lower():
-                        return
-                    self.controller.logger.log(f"자동 Git commit 실패: {out}", "ERROR")
-                    return
-                self.controller.logger.log("자동 Git 커밋 완료", "SUCCESS")
-            except Exception as e:
-                self.controller.logger.log(f"자동 Git 처리 실패: {e}", "ERROR")
 
 
 def run_gui() -> int:
