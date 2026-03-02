@@ -496,6 +496,7 @@ class NaverSeleniumService:
                 or "connection refused" in low
                 or "winerror 10061" in low
                 or "invalid session id" in low
+                or "webdriver not initialized" in low
             ):
                 self.session_disconnected = True
             self.log(f"단일 URL 제출 실패: {e}", "ERROR")
@@ -603,6 +604,9 @@ class NaverSeleniumService:
                             continue
                     if self.session_disconnected and not recovered:
                         self.log("세션 복구 실패로 현재 URL을 실패 처리합니다.", "ERROR")
+                        failed += 1
+                        self.log("세션이 비정상 상태여서 남은 URL 제출을 중단합니다. 다음 실행에서 이어서 재시도하세요.", "WARNING")
+                        break
                     failed += 1
 
             self.log(f"네이버 제출 완료: 성공 {success}개 | 실패 {failed}개 | 건너뜀 {skipped}개", "SUCCESS")
@@ -619,7 +623,8 @@ class NaverSeleniumService:
             pass
 
     def __enter__(self):
-        self.setup_driver()
+        if not self.setup_driver():
+            raise RuntimeError("WebDriver setup failed")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
