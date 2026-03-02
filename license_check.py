@@ -20,6 +20,7 @@ class LicenseManager:
     MACHINE_ID_VERSION = "v2"
     MACHINE_ID_PEPPER = "AutoIndexing-MID-2026-03"
     FORCE_ROTATE_MACHINE_ID_ONCE = True
+    FORBIDDEN_MACHINE_ID_FILENAME = "machine_id.txt"
     """라이선스 관리자 클래스 - Google Spreadsheet 연동"""
 
     # Google Spreadsheet ID
@@ -31,6 +32,7 @@ class LicenseManager:
         self.state_dir = self._get_state_dir()
         self.license_file = os.path.join(self.state_dir, "license.json")
         self.rotation_marker_file = os.path.join(self.state_dir, f"machine_id_rotated_{self.MACHINE_ID_VERSION}.flag")
+        self._enforce_no_machine_id_txt()
         self._cleanup_legacy_machine_id_files()
         self.license_data = self.load_license()
 
@@ -61,13 +63,13 @@ class LicenseManager:
 
     def _legacy_machine_id_paths(self):
         paths = [
-            os.path.join(self.base_dir, "setting", "machine_id.txt"),
-            os.path.join(self.state_dir, "machine_id.txt"),
+            os.path.join(self.base_dir, "setting", self.FORBIDDEN_MACHINE_ID_FILENAME),
+            os.path.join(self.state_dir, self.FORBIDDEN_MACHINE_ID_FILENAME),
         ]
         if platform.system() == "Windows":
             programdata = os.getenv("PROGRAMDATA", "").strip()
             if programdata:
-                paths.append(os.path.join(programdata, "Auto_indexing", "machine_id.txt"))
+                paths.append(os.path.join(programdata, "Auto_indexing", self.FORBIDDEN_MACHINE_ID_FILENAME))
         # 중복 제거
         deduped = []
         seen = set()
@@ -87,6 +89,10 @@ class LicenseManager:
                     os.remove(path)
             except Exception:
                 pass
+
+    def _enforce_no_machine_id_txt(self):
+        """정책: machine_id.txt 파일은 생성/사용하지 않고 발견 즉시 삭제"""
+        self._cleanup_legacy_machine_id_files()
 
     def _normalize_identifier(self, value):
         """식별자 정규화: 영숫자만 소문자로 유지"""
