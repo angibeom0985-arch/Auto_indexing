@@ -240,6 +240,16 @@ class NaverSeleniumService:
                 pw_input.clear()
                 pw_input.send_keys(password)
 
+                # 로그인 상태 유지 체크 후 로그인 버튼 클릭
+                try:
+                    keep_box = wait.until(EC.element_to_be_clickable((By.ID, "keep")))
+                    aria_checked = (keep_box.get_attribute("aria-checked") or "").strip().lower()
+                    if aria_checked != "true":
+                        drv.execute_script("arguments[0].click();", keep_box)
+                        time.sleep(0.2)
+                except Exception:
+                    pass
+
                 login_btn = wait.until(EC.element_to_be_clickable((By.ID, "log.login")))
                 login_btn.click()
                 time.sleep(1.5)
