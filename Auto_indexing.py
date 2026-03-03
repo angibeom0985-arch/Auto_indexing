@@ -2929,6 +2929,7 @@ if GUI_AVAILABLE:
                   <h3 style="font-size:17px; margin:0 0 10px 0;">[색인 요청할 도메인 URL]</h3>
                   <p style="margin:0 0 7px 0;">- 색인할 사이트의 <b>도메인 URL</b>을 입력합니다. 예) https://example.com</p>
                   <p style="margin:0 0 7px 0;">- 사이트가 여러 개면 <b>+ 추가</b>로 칸을 늘려 각각 입력합니다.</p>
+                  <p style="margin:0 0 7px 0;">- URL 입력칸 1개만 있어도, 여러 URL을 줄바꿈한 뒤 <b>붙여넣기(Ctrl+V)</b>하면 칸이 자동으로 추가되어 한 번에 등록됩니다.</p>
                   <p style="margin:0 0 14px 0;">- 각 URL 오른쪽에서 사이트별로 <b>요청 순서</b>를 고를 수 있습니다.<br>(가장 오래된 글부터 / 가장 최신 글부터)</p>
                   <h3 style="font-size:17px; margin:0 0 10px 0;">[버튼 사용 순서]</h3>
                   <p style="margin:0 0 7px 0;">1. JSON 파일과 사이트 URL을 입력합니다.</p>
@@ -2957,6 +2958,7 @@ if GUI_AVAILABLE:
                   <h3 style="font-size:17px; margin:0 0 10px 0;">[색인 요청할 도메인 URL]</h3>
                   <p style="margin:0 0 7px 0;">- 색인할 사이트의 <b>도메인 URL</b>을 입력합니다. 예) https://example.com</p>
                   <p style="margin:0 0 7px 0;">- 여러 사이트를 쓰면 <b>+ 추가</b>로 칸을 늘려 입력합니다.</p>
+                  <p style="margin:0 0 7px 0;">- URL 입력칸 1개만 있어도, 여러 URL을 줄바꿈한 뒤 <b>붙여넣기(Ctrl+V)</b>하면 칸이 자동으로 추가되어 한 번에 등록됩니다.</p>
                   <p style="margin:0 0 14px 0;">- 각 URL 오른쪽에서 사이트별로 <b>요청 순서</b>를 고를 수 있습니다.<br>(가장 오래된 글부터 / 가장 최신 글부터)</p>
                   <h3 style="font-size:17px; margin:0 0 10px 0;">[버튼 사용 순서]</h3>
                   <p style="margin:0 0 7px 0;">1. 네이버 계정과 사이트 URL을 입력합니다.</p>
