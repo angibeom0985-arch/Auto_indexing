@@ -256,9 +256,18 @@ class NaverSeleniumService:
                 self.log("로그인 버튼 클릭 완료", "INFO")
 
                 # 2차 인증/리다이렉트 대기
+                wait_opt_in_clicked = False
                 for _ in range(45):
                     if "searchadvisor.naver.com" in (drv.current_url or ""):
                         break
+                    if not wait_opt_in_clicked and "nid.naver.com" in (drv.current_url or ""):
+                        try:
+                            wait_label = drv.find_element(By.CSS_SELECTOR, "label[for='wait']")
+                            drv.execute_script("arguments[0].click();", wait_label)
+                            wait_opt_in_clicked = True
+                            self.log("2차 인증 페이지: '이 브라우저는 2단계 인증 없이 로그인' 항목을 선택했습니다.", "INFO")
+                        except Exception:
+                            pass
                     time.sleep(1)
 
             drv.get("https://searchadvisor.naver.com/console/board")
