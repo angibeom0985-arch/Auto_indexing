@@ -1672,7 +1672,8 @@ class NaverIndexingService:
                             site_urls.append(u)
                             site_seen.add(u)
                     st["urls"] = site_urls
-            except Exception:
+            except Exception as e:
+                self.logger.log(f"{site} 네이버 Selenium 처리 예외: {type(e).__name__}: {e}", "ERROR")
                 fail += len(proc_bucket)
                 st["failed"] = int(st.get("failed", 0) or 0) + len(proc_bucket)
         self._save_quota(quota)

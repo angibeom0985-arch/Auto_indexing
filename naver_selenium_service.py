@@ -146,47 +146,81 @@ class NaverSeleniumService:
             raise RuntimeError("WebDriverWait not initialized")
         return self.wait
 
-    def setup_driver(self) -> bool:
-        try:
-            self.log("크롬 브라우저 실행을 시작합니다.", "INFO")
-            os.makedirs(self.chrome_profile_dir, exist_ok=True)
-            options = Options()
-            if self.headless:
-                options.add_argument("--headless=new")
+    def _build_chrome_options(self, use_persistent_profile: bool) -> Options:
+        options = Options()
+        if self.headless:
+            options.add_argument("--headless=new")
+        if use_persistent_profile:
             options.add_argument(f"--user-data-dir={self.chrome_profile_dir}")
             options.add_argument("--profile-directory=Default")
-            options.add_argument("--no-sandbox")
-            options.add_argument("--disable-dev-shm-usage")
-            options.add_argument("--disable-blink-features=AutomationControlled")
-            options.add_argument("--start-maximized")
-            options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
-            options.add_experimental_option("useAutomationExtension", False)
-            options.add_argument(
-                "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--start-maximized")
+        options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
+        options.add_experimental_option("useAutomationExtension", False)
+        options.add_argument(
+            "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        return options
 
+    @staticmethod
+    def _create_chrome_driver(options: Options):
+        try:
+            from webdriver_manager.chrome import ChromeDriverManager
+
+            return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+        except Exception:
+            return webdriver.Chrome(options=options)
+
+    def setup_driver(self) -> bool:
+        self.cleanup()
+        self.driver = None
+        self.wait = None
+        self.log("크롬 브라우저 실행을 시작합니다.", "INFO")
+        os.makedirs(self.chrome_profile_dir, exist_ok=True)
+
+        attempts = [
+            (True, "고정 프로필"),
+            (False, "임시 프로필"),
+        ]
+        last_err = None
+        for use_persistent, label in attempts:
             try:
-                from webdriver_manager.chrome import ChromeDriverManager
+                options = self._build_chrome_options(use_persistent)
+                self.driver = self._create_chrome_driver(options)
+                drv = self._driver()
+                self.wait = WebDriverWait(drv, 12)
+                try:
+                    drv.maximize_window()
+                except Exception:
+                    drv.set_window_size(1920, 1080)
+                if not use_persistent:
+                    self.log("고정 프로필로 실행 실패하여 임시 프로필로 전환했습니다.", "WARNING")
+                self.log("크롬 브라우저 실행 완료", "SUCCESS")
+                return True
+            except Exception as e:
+                last_err = e
+                self.log(f"크롬 실행 시도 실패({label}): {type(e).__name__}: {e}", "WARNING")
+                try:
+                    if self.driver is not None:
+                        self.driver.quit()
+                except Exception:
+                    pass
+                self.driver = None
+                self.wait = None
+                continue
 
-                self.driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-            except Exception:
-                self.driver = webdriver.Chrome(options=options)
-
-            drv = self._driver()
-            self.wait = WebDriverWait(drv, 12)
-            try:
-                drv.maximize_window()
-            except Exception:
-                drv.set_window_size(1920, 1080)
-            self.log("크롬 브라우저 실행 완료", "SUCCESS")
-            return True
-        except Exception as e:
-            self.log(f"크롬 드라이버 준비 실패: {e}", "ERROR")
-            return False
+        self.log(f"크롬 드라이버 준비 실패: {type(last_err).__name__ if last_err else 'UnknownError'}: {last_err}", "ERROR")
+        return False
 
     def login_naver(self, username: str, password: str) -> bool:
         try:
+            if self.driver is None or self.wait is None:
+                if not self.setup_driver():
+                    self.log("네이버 로그인 실패: WebDriver 초기화 실패", "ERROR")
+                    return False
             drv = self._driver()
             wait = self._wait()
             self.log("네이버 서치어드바이저 보드로 이동합니다.", "INFO")
