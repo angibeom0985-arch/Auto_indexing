@@ -483,7 +483,7 @@ except Exception:
 
 try:
     from PyQt6.QtCore import QMetaObject, QThread, QTimer, Qt, QUrl, Q_ARG, pyqtSignal
-    from PyQt6.QtGui import QDesktopServices, QFont, QIcon
+    from PyQt6.QtGui import QDesktopServices, QFont, QIcon, QKeySequence
     from PyQt6.QtWidgets import QApplication, QComboBox, QDialog, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton, QScrollArea, QTabWidget, QTextBrowser, QTextEdit, QVBoxLayout, QWidget
     GUI_AVAILABLE = True
 except Exception:
@@ -1998,11 +1998,40 @@ if GUI_AVAILABLE:
             )
 
     class GlassLineEdit(QLineEdit):
+        multiline_urls_pasted = pyqtSignal(str)
+
         def __init__(self, placeholder="", parent=None):
             super().__init__(parent)
             self.setPlaceholderText(placeholder)
             self.setMinimumHeight(36)
             self.setFont(QFont("맑은 고딕", 10))
+
+        @staticmethod
+        def _clipboard_text() -> str:
+            try:
+                cb = QApplication.clipboard()
+                return str(cb.text() or "") if cb is not None else ""
+            except Exception:
+                return ""
+
+        @staticmethod
+        def _is_multiline_text(text: str) -> bool:
+            return ("\n" in str(text or "")) or ("\r" in str(text or ""))
+
+        def keyPressEvent(self, event):
+            if event is not None and event.matches(QKeySequence.StandardKey.Paste):
+                raw = self._clipboard_text()
+                if self._is_multiline_text(raw):
+                    self.multiline_urls_pasted.emit(raw)
+                    return
+            super().keyPressEvent(event)
+
+        def paste(self):
+            raw = self._clipboard_text()
+            if self._is_multiline_text(raw):
+                self.multiline_urls_pasted.emit(raw)
+                return
+            super().paste()
 
     class GlassTextEdit(QTextBrowser):
         def __init__(self, parent=None):
@@ -2403,6 +2432,11 @@ if GUI_AVAILABLE:
             order_combo.addItem("가장 최신 글부터", "newest")
             order_combo.setCurrentIndex(1 if order == "newest" else 0)
             order_combo.setMinimumWidth(170)
+            inp.multiline_urls_pasted.connect(
+                lambda raw, svc=service, target_inp=inp, target_order=order_combo: self._handle_seed_multiline_paste(
+                    svc, target_inp, target_order, raw
+                )
+            )
             row_layout.addWidget(inp, 1)
             row_layout.addWidget(order_combo, 0)
             if service == "google":
@@ -2413,6 +2447,16 @@ if GUI_AVAILABLE:
                 self.naver_seed_rows.append({"widget": row_widget, "input": inp, "order": order_combo})
                 self.naver_seed_urls_layout.addWidget(row_widget)
                 QTimer.singleShot(0, lambda: self._scroll_seed_to_bottom("naver"))
+            self._refresh_seed_url_count_label(service)
+
+        def _handle_seed_multiline_paste(self, service: str, target_inp: QLineEdit, target_order: QComboBox, raw_text: str):
+            urls = self._lines(str(raw_text or "").replace("\r", "\n"))
+            if not urls:
+                return
+            current_order = self._normalize_order_value(str(target_order.currentData() or "oldest"))
+            target_inp.setText(urls[0])
+            for u in urls[1:]:
+                self._add_seed_url_input(service, u, current_order)
             self._refresh_seed_url_count_label(service)
 
         def _refresh_seed_url_count_label(self, service: str):
