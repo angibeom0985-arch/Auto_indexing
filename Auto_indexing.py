@@ -2260,6 +2260,9 @@ if GUI_AVAILABLE:
             self.google_add_seed_btn = GlassButton("+ 추가", "add")
             self.google_add_seed_btn.clicked.connect(lambda: self._add_seed_url_input("google"))
             seed_btn_row.addWidget(self.google_add_seed_btn, 0, Qt.AlignmentFlag.AlignLeft)
+            self.google_seed_count_label = QLabel("총 URL 0개")
+            self.google_seed_count_label.setStyleSheet(f"color: {WP_COLORS['text_muted']}; font-size: 12px;")
+            seed_btn_row.addWidget(self.google_seed_count_label, 0, Qt.AlignmentFlag.AlignLeft)
             seed_btn_row.addStretch(1)
             s.addLayout(seed_btn_row)
             s.addWidget(self.google_seed_scroll, 1)
@@ -2331,6 +2334,9 @@ if GUI_AVAILABLE:
             self.naver_add_seed_btn = GlassButton("+ 추가", "add")
             self.naver_add_seed_btn.clicked.connect(lambda: self._add_seed_url_input("naver"))
             seed_btn_row.addWidget(self.naver_add_seed_btn, 0, Qt.AlignmentFlag.AlignLeft)
+            self.naver_seed_count_label = QLabel("총 URL 0개")
+            self.naver_seed_count_label.setStyleSheet(f"color: {WP_COLORS['text_muted']}; font-size: 12px;")
+            seed_btn_row.addWidget(self.naver_seed_count_label, 0, Qt.AlignmentFlag.AlignLeft)
             seed_btn_row.addStretch(1)
             sd.addLayout(seed_btn_row)
             sd.addWidget(self.naver_seed_scroll, 1)
@@ -2391,6 +2397,7 @@ if GUI_AVAILABLE:
             inp = GlassLineEdit("https://example.com")
             inp.setText((value or "").strip())
             inp.returnPressed.connect(self._save_from_seed_enter)
+            inp.textChanged.connect(lambda _t, svc=service: self._refresh_seed_url_count_label(svc))
             order_combo = QComboBox()
             order_combo.addItem("가장 오래된 글부터", "oldest")
             order_combo.addItem("가장 최신 글부터", "newest")
@@ -2406,6 +2413,16 @@ if GUI_AVAILABLE:
                 self.naver_seed_rows.append({"widget": row_widget, "input": inp, "order": order_combo})
                 self.naver_seed_urls_layout.addWidget(row_widget)
                 QTimer.singleShot(0, lambda: self._scroll_seed_to_bottom("naver"))
+            self._refresh_seed_url_count_label(service)
+
+        def _refresh_seed_url_count_label(self, service: str):
+            count = len(self._collect_seed_items(service))
+            if service == "google":
+                if hasattr(self, "google_seed_count_label") and self.google_seed_count_label is not None:
+                    self.google_seed_count_label.setText(f"총 URL {count}개")
+            else:
+                if hasattr(self, "naver_seed_count_label") and self.naver_seed_count_label is not None:
+                    self.naver_seed_count_label.setText(f"총 URL {count}개")
 
         def _scroll_seed_to_bottom(self, service: str):
             scroll = self.google_seed_scroll if service == "google" else self.naver_seed_scroll
@@ -2430,6 +2447,7 @@ if GUI_AVAILABLE:
                     self._add_seed_url_input(service, it.get("url", ""), it.get("order", "oldest"))
             else:
                 self._add_seed_url_input(service)
+            self._refresh_seed_url_count_label(service)
 
         def _collect_seed_urls(self, service: str) -> List[str]:
             return [it["url"] for it in self._collect_seed_items(service)]
