@@ -1891,6 +1891,58 @@ class IndexingController:
                 res["errors"] += nf
                 if ns > 0:
                     self.url_state.mark_submitted("naver", site_targets[:ns])
+                if nf > 0 and not self.stop_event.is_set():
+                    retry_remaining = self.naver_service.remaining_for_site(site)
+                    if retry_remaining <= 0:
+                        self.logger.log(f"{site} 재시도 건너뜀: 남은 할당량이 없습니다.", "WARNING")
+                    else:
+                        self.logger.log(
+                            f"{site} 오류 URL 재시도를 위해 URL을 다시 수집합니다. (남은 할당량 {retry_remaining}개)",
+                            "WARNING",
+                        )
+                        retry_crawled, retry_dates, retry_titles = self.url_manager.crawl_site(
+                            site,
+                            submit_order=site_order_map.get(site.rstrip("/"), default_order),
+                        )
+                        if retry_crawled:
+                            retry_crawled = self._filter_submission_targets(retry_crawled, "네이버")
+                            retry_dates = {u: retry_dates[u] for u in retry_crawled if u in retry_dates}
+                            retry_titles = {u: retry_titles[u] for u in retry_crawled if u in retry_titles}
+                            self.url_state.upsert_seen_urls(retry_crawled, retry_dates, retry_titles)
+                        retry_pending_for_site = self.url_state.pending_count_for_site("naver", site)
+                        retry_targets = self.url_state.get_pending_urls_for_site(
+                            "naver",
+                            site,
+                            retry_remaining,
+                            submit_order=site_order_map.get(site.rstrip("/"), default_order),
+                        )
+                        retry_targets = self._filter_submission_targets(retry_targets, "네이버")
+                        if len(retry_targets) > retry_remaining:
+                            retry_targets = retry_targets[:retry_remaining]
+                        if not retry_targets:
+                            self.logger.log(f"{site} 재수집 후 재시도할 URL이 없습니다.")
+                        else:
+                            naver_total_targets += len(retry_targets)
+                            res["scheduled"] += max(0, retry_pending_for_site - len(retry_targets))
+                            if progress_callback:
+                                progress_callback(f"[{idx}/{total_sites}] {site} 재수집 URL 재시도 중...", 78)
+                            rns, rnf = self.naver_service.submit_selenium(
+                                retry_targets,
+                                [site],
+                                cfg.get("naver_username", ""),
+                                cfg.get("naver_password", ""),
+                                self.url_state.get_url_meta(retry_targets),
+                                stop_event=self.stop_event,
+                                submit_order=site_order_map.get(site.rstrip("/"), default_order),
+                            )
+                            res["naver_success"] += rns
+                            res["errors"] += rnf
+                            if rns > 0:
+                                self.url_state.mark_submitted("naver", retry_targets[:rns])
+                            self.logger.log(
+                                f"{site} 재시도 완료: 성공 {rns}개 | 실패 {rnf}개",
+                                "SUCCESS" if rnf == 0 else "WARNING",
+                            )
 
             res["total"] += naver_total_targets
 
