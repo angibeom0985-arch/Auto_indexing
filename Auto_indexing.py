@@ -1723,7 +1723,11 @@ class IndexingController:
             else:
                 skipped += 1
         if skipped > 0:
-            self.logger.log(f"{service_name}: 홈(/) 또는 비정상 URL {skipped}개를 제출 대상에서 제외했습니다.", "WARNING")
+            self.logger.log(
+                f"{service_name}: 홈(/) 또는 비정상 URL {skipped}개를 제출 대상에서 제외했습니다. "
+                "(기준: 스킴/도메인 없음, 경로가 '/' 또는 비어 있음, 경로가 '//'로 시작)",
+                "WARNING",
+            )
         return out
 
     @staticmethod
@@ -2262,6 +2266,12 @@ if GUI_AVAILABLE:
             self._add_seed_url_input("google")
             log_group = QGroupBox("로그 메시지")
             gl = QVBoxLayout(log_group)
+            google_log_top = QHBoxLayout()
+            google_log_top.addStretch(1)
+            self.google_error_detail_btn = GlassButton("오류 상세", "secondary")
+            self.google_error_detail_btn.clicked.connect(lambda: self._show_error_details_dialog("google"))
+            google_log_top.addWidget(self.google_error_detail_btn, 0)
+            gl.addLayout(google_log_top)
             self.google_log = GlassTextEdit()
             self.google_log.setReadOnly(True)
             self.google_log.textChanged.connect(lambda: self._scroll_log_to_bottom(self.google_log))
@@ -2327,6 +2337,12 @@ if GUI_AVAILABLE:
             self._add_seed_url_input("naver")
             log_group = QGroupBox("로그 메시지")
             nl = QVBoxLayout(log_group)
+            naver_log_top = QHBoxLayout()
+            naver_log_top.addStretch(1)
+            self.naver_error_detail_btn = GlassButton("오류 상세", "secondary")
+            self.naver_error_detail_btn.clicked.connect(lambda: self._show_error_details_dialog("naver"))
+            naver_log_top.addWidget(self.naver_error_detail_btn, 0)
+            nl.addLayout(naver_log_top)
             self.naver_log = GlassTextEdit()
             self.naver_log.setReadOnly(True)
             self.naver_log.textChanged.connect(lambda: self._scroll_log_to_bottom(self.naver_log))
@@ -2477,14 +2493,88 @@ if GUI_AVAILABLE:
             )
 
         def _on_error_logged(self, service: str, message: str):
-            error_text = self._strip_error_line(message)
-            self._append_log(service, f"❌ 오류 원문: {error_text}")
-            tip = self._resolve_troubleshooting_tip(service, error_text)
-            self._append_log(service, f"🛠 해결 방법: {tip}")
-            david_message = self._build_david_message(service, error_text, tip)
-            self._append_log(service, "📋 데이비 전달 메시지:")
-            for ln in david_message.splitlines():
-                self._append_log(service, ln)
+            # Keep the main log compact. Detailed troubleshooting is shown via the "오류 상세" dialog.
+            _ = service
+            _ = message
+
+        @staticmethod
+        def _unique_preserve_order(lines: List[str]) -> List[str]:
+            seen: Set[str] = set()
+            out: List[str] = []
+            for line in lines:
+                text = str(line or "").strip()
+                if not text or text in seen:
+                    continue
+                seen.add(text)
+                out.append(text)
+            return out
+
+        def _extract_last_run_error_details(self, service: str) -> Dict[str, Any]:
+            target = self.google_log if service == "google" else self.naver_log
+            lines = [ln.strip() for ln in target.toPlainText().splitlines() if ln.strip()]
+            completed_indexes = [i for i, ln in enumerate(lines) if "작업 완료: 전체 " in ln]
+            if not completed_indexes:
+                return {"ok": False, "message": "아직 완료된 작업 로그가 없습니다."}
+            last_idx = completed_indexes[-1]
+            prev_idx = completed_indexes[-2] if len(completed_indexes) >= 2 else -1
+            run_lines = lines[prev_idx + 1 : last_idx + 1]
+            summary_line = lines[last_idx]
+            m = re.search(r"오류\s+(\d+)개", summary_line)
+            total_errors = int(m.group(1)) if m else 0
+            hard_errors = [ln for ln in run_lines if "❌" in ln]
+            submit_failures = [ln for ln in run_lines if "요청 내역 반영 확인 실패:" in ln]
+            details = self._unique_preserve_order(hard_errors + submit_failures)
+            return {
+                "ok": True,
+                "summary": summary_line,
+                "total_errors": total_errors,
+                "details": details,
+            }
+
+        def _show_error_details_dialog(self, service: str):
+            payload = self._extract_last_run_error_details(service)
+            service_label = self._service_label(service)
+            if not payload.get("ok"):
+                QMessageBox.information(self, f"{service_label} 오류 상세", str(payload.get("message", "오류 상세가 없습니다.")))
+                return
+            summary = str(payload.get("summary", "") or "")
+            total_errors = int(payload.get("total_errors", 0) or 0)
+            details = payload.get("details", []) or []
+            if not isinstance(details, list):
+                details = []
+
+            dlg = QDialog(self)
+            dlg.setWindowTitle(f"{service_label} 오류 상세")
+            dlg.resize(920, 620)
+            layout = QVBoxLayout(dlg)
+
+            summary_label = QLabel(f"마지막 완료 요약\n{summary}")
+            summary_label.setWordWrap(True)
+            layout.addWidget(summary_label, 0)
+
+            browser = QTextBrowser(dlg)
+            browser.setOpenExternalLinks(False)
+            browser.setOpenLinks(False)
+            if total_errors <= 0:
+                browser.setPlainText("마지막 완료 작업의 오류 수가 0개입니다.")
+            elif details:
+                rendered = [f"[{i}] {ln}" for i, ln in enumerate(details, 1)]
+                browser.setPlainText("\n".join(rendered))
+            else:
+                browser.setPlainText(
+                    "오류 개수는 집계됐지만 원문 상세를 찾지 못했습니다.\n"
+                    "로그 파일에서 같은 시각대의 원문을 확인해 주세요.\n"
+                    f"- 로그 파일: {LOG_FILE}"
+                )
+            layout.addWidget(browser, 1)
+
+            btn_row = QHBoxLayout()
+            btn_row.addStretch(1)
+            close_btn = GlassButton("닫기", "secondary")
+            close_btn.clicked.connect(dlg.accept)
+            btn_row.addWidget(close_btn)
+            layout.addLayout(btn_row)
+            dlg.exec()
 
         def _handle_log_link_clicked(self, url: QUrl):
             u = (url.toString() or "").strip()
@@ -2918,6 +3008,9 @@ if GUI_AVAILABLE:
             self.progress_bar.setValue(100)
             self.status_label.setText("완료")
             service_label = "구글" if service == "google" else "네이버"
+            errors = int(result.get("errors", 0) or 0)
+            if errors > 0:
+                self._append_log(service, f"ℹ️ 오류 {errors}개 상세는 '오류 상세' 버튼에서 확인하세요.")
             self._show_brief_notice(f"{service_label} 작업이 완료되었습니다.")
             if service == "google":
                 self.google_worker = None
