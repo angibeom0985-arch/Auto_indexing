@@ -2048,8 +2048,6 @@ if GUI_AVAILABLE:
             self.current_config = self.controller.config_manager.default_config.copy()
             self.usage_period_text = usage_period_text
             self._notice_boxes: List[QMessageBox] = []
-            self._david_message_boxes: Dict[str, QTextEdit] = {}
-            self._david_copy_buttons: Dict[str, GlassButton] = {}
             self.error_logged.connect(self._on_error_logged)
             self.init_ui()
             if not self.initialize_encryption_and_load_config():
@@ -2268,7 +2266,6 @@ if GUI_AVAILABLE:
             self.google_log.textChanged.connect(lambda: self._scroll_log_to_bottom(self.google_log))
             self.google_log.anchorClicked.connect(self._handle_log_link_clicked)
             gl.addWidget(self.google_log)
-            gl.addWidget(self._create_david_message_panel("google"))
             split_row = QHBoxLayout()
             split_row.setSpacing(12)
             split_row.addWidget(seeds, 1)
@@ -2334,7 +2331,6 @@ if GUI_AVAILABLE:
             self.naver_log.textChanged.connect(lambda: self._scroll_log_to_bottom(self.naver_log))
             self.naver_log.anchorClicked.connect(self._handle_log_link_clicked)
             nl.addWidget(self.naver_log)
-            nl.addWidget(self._create_david_message_panel("naver"))
             split_row = QHBoxLayout()
             split_row.setSpacing(12)
             split_row.addWidget(seed_group, 1)
@@ -2445,46 +2441,6 @@ if GUI_AVAILABLE:
             target.append(message)
             self._scroll_log_to_bottom(target)
 
-        def _create_david_message_panel(self, service: str) -> QWidget:
-            panel = QWidget()
-            panel_layout = QVBoxLayout(panel)
-            panel_layout.setContentsMargins(0, 8, 0, 0)
-            panel_layout.setSpacing(6)
-            panel_layout.addWidget(QLabel("오류 발생 시 데이비에게 전달할 메시지"))
-            box = QTextEdit()
-            box.setReadOnly(True)
-            box.setMinimumHeight(96)
-            box.setPlaceholderText("오류가 발생하면 여기에 전달 메시지가 자동 생성됩니다.")
-            panel_layout.addWidget(box, 1)
-            row = QHBoxLayout()
-            row.addStretch(1)
-            copy_btn = GlassButton("복사", "secondary")
-            copy_btn.clicked.connect(lambda: self._copy_david_message(service))
-            row.addWidget(copy_btn, 0)
-            panel_layout.addLayout(row)
-            self._david_message_boxes[service] = box
-            self._david_copy_buttons[service] = copy_btn
-            return panel
-
-        def _copy_david_message(self, service: str) -> bool:
-            box = self._david_message_boxes.get(service)
-            if box is None:
-                return False
-            text = box.toPlainText().strip()
-            if not text:
-                self._show_brief_notice("복사할 전달 메시지가 없습니다.")
-                return False
-            clipboard = QApplication.clipboard()
-            if clipboard is None:
-                return False
-            clipboard.setText(text)
-            btn = self._david_copy_buttons.get(service)
-            if btn is not None:
-                btn.setText("복사됨")
-                QTimer.singleShot(900, lambda b=btn: b.setText("복사"))
-            self._show_brief_notice("데이비 전달 메시지를 복사했습니다.")
-            return True
-
         def _service_label(self, service: str) -> str:
             return "구글" if service == "google" else "네이버"
 
@@ -2525,10 +2481,9 @@ if GUI_AVAILABLE:
             tip = self._resolve_troubleshooting_tip(service, error_text)
             self._append_log(service, f"🛠 해결 방법: {tip}")
             david_message = self._build_david_message(service, error_text, tip)
-            box = self._david_message_boxes.get(service)
-            if box is not None:
-                box.setPlainText(david_message)
-            self._append_log(service, "📋 데이비에게 전달할 메시지를 아래 박스에 생성했습니다. [복사] 버튼으로 바로 복사하세요.")
+            self._append_log(service, "📋 데이비 전달 메시지:")
+            for ln in david_message.splitlines():
+                self._append_log(service, ln)
 
         def _handle_log_link_clicked(self, url: QUrl):
             u = (url.toString() or "").strip()
