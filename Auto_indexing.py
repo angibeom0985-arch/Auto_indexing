@@ -2131,6 +2131,8 @@ if GUI_AVAILABLE:
             self.controller = IndexingController()
             self.google_worker: Optional[IndexingWorker] = None
             self.naver_worker: Optional[IndexingWorker] = None
+            self._active_error_details: Dict[str, List[str]] = {"google": [], "naver": []}
+            self._completed_error_details: Dict[str, List[Dict[str, Any]]] = {"google": [], "naver": []}
             self.current_config = self.controller.config_manager.default_config.copy()
             self.usage_period_text = usage_period_text
             self._notice_boxes: List[QMessageBox] = []
@@ -2607,9 +2609,8 @@ if GUI_AVAILABLE:
             )
 
         def _on_error_logged(self, service: str, message: str):
-            # Keep the main log compact. Detailed troubleshooting is shown via the "오류 상세" dialog.
-            _ = service
-            _ = message
+            # Keep the main log compact and collect raw error lines for the detail dialog.
+            self._record_active_error_detail(service, message)
 
         @staticmethod
         def _unique_preserve_order(lines: List[str]) -> List[str]:
@@ -2622,6 +2623,50 @@ if GUI_AVAILABLE:
                 seen.add(text)
                 out.append(text)
             return out
+
+        def _reset_active_error_details(self, service: str):
+            self._active_error_details[service] = []
+
+        def _record_active_error_detail(self, service: str, message: str):
+            text = str(message or "").strip()
+            if not text:
+                return
+            bag = self._active_error_details.setdefault(service, [])
+            if text not in bag:
+                bag.append(text)
+
+        def _latest_service_summary_line(self, service: str) -> str:
+            target = self.google_log if service == "google" else self.naver_log
+            lines = [ln.strip() for ln in target.toPlainText().splitlines() if ln.strip()]
+            for ln in reversed(lines):
+                if "작업 완료: 전체 " in ln:
+                    return ln
+            return ""
+
+        def _snapshot_completed_error_details(self, service: str, total_errors: int):
+            details = self._unique_preserve_order(self._active_error_details.get(service, []))
+            snapshot = {
+                "summary": self._latest_service_summary_line(service),
+                "total_errors": int(total_errors or 0),
+                "details": details,
+            }
+            history = self._completed_error_details.setdefault(service, [])
+            history.append(snapshot)
+            if len(history) > 30:
+                del history[:-30]
+            self._reset_active_error_details(service)
+
+        def _resolve_snapshot_details(self, service: str, summary: str) -> List[str]:
+            history = self._completed_error_details.get(service, [])
+            if not history:
+                return []
+            for snap in reversed(history):
+                if str(snap.get("summary", "") or "").strip() == summary.strip():
+                    details = snap.get("details", [])
+                    return details if isinstance(details, list) else []
+            latest = history[-1]
+            details = latest.get("details", [])
+            return details if isinstance(details, list) else []
 
         def _extract_last_run_error_details(self, service: str) -> Dict[str, Any]:
             target = self.google_log if service == "google" else self.naver_log
@@ -2638,6 +2683,8 @@ if GUI_AVAILABLE:
             hard_errors = [ln for ln in run_lines if "❌" in ln]
             submit_failures = [ln for ln in run_lines if "요청 내역 반영 확인 실패:" in ln]
             details = self._unique_preserve_order(hard_errors + submit_failures)
+            if total_errors > 0:
+                details = self._unique_preserve_order(details + self._resolve_snapshot_details(service, summary_line))
             return {
                 "ok": True,
                 "summary": summary_line,
@@ -2676,9 +2723,8 @@ if GUI_AVAILABLE:
                 browser.setPlainText("\n".join(rendered))
             else:
                 browser.setPlainText(
-                    "오류 개수는 집계됐지만 원문 상세를 찾지 못했습니다.\n"
-                    "로그 파일에서 같은 시각대의 원문을 확인해 주세요.\n"
-                    f"- 로그 파일: {LOG_FILE}"
+                    "오류 개수는 집계됐지만 화면용 오류 원문을 찾지 못했습니다.\n"
+                    "다음 실행부터는 원문이 자동 수집되어 이 창에 바로 표시됩니다."
                 )
             layout.addWidget(browser, 1)
 
@@ -3075,6 +3121,7 @@ if GUI_AVAILABLE:
                 return
             self.save_all_configs()
             worker_controller = self._new_runtime_controller("google")
+            self._reset_active_error_details("google")
             self.google_worker = IndexingWorker(worker_controller, seeds, "google")
             self.google_worker.progress_updated.connect(self.on_progress)
             self.google_worker.finished.connect(self.on_finished)
@@ -3097,6 +3144,7 @@ if GUI_AVAILABLE:
                 return
             self.save_all_configs()
             worker_controller = self._new_runtime_controller("naver")
+            self._reset_active_error_details("naver")
             self.naver_worker = IndexingWorker(worker_controller, seeds, "naver")
             self.naver_worker.progress_updated.connect(self.on_progress)
             self.naver_worker.finished.connect(self.on_finished)
@@ -3125,6 +3173,7 @@ if GUI_AVAILABLE:
             self.status_label.setText("완료")
             service_label = "구글" if service == "google" else "네이버"
             errors = int(result.get("errors", 0) or 0)
+            self._snapshot_completed_error_details(service, errors)
             if errors > 0:
                 self._append_log(service, f"ℹ️ 오류 {errors}개 상세는 '오류 상세' 버튼에서 확인하세요.")
             self._show_brief_notice(f"{service_label} 작업이 완료되었습니다.")
