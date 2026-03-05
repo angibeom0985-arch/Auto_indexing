@@ -484,7 +484,7 @@ except Exception:
 try:
     from PyQt6.QtCore import QMetaObject, QThread, QTimer, Qt, QUrl, Q_ARG, pyqtSignal
     from PyQt6.QtGui import QDesktopServices, QFont, QIcon, QKeySequence
-    from PyQt6.QtWidgets import QApplication, QComboBox, QDialog, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton, QScrollArea, QTabWidget, QTextBrowser, QTextEdit, QVBoxLayout, QWidget
+    from PyQt6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton, QScrollArea, QTabWidget, QTextBrowser, QTextEdit, QVBoxLayout, QWidget
     GUI_AVAILABLE = True
 except Exception:
     GUI_AVAILABLE = False
@@ -654,14 +654,19 @@ class ConfigManager:
                     order = str(it.get("order", default_order) or default_order).strip().lower()
                     if order not in ("oldest", "newest"):
                         order = default_order
-                    normalized.append({"url": u, "order": order})
+                    enabled = it.get("enabled", True)
+                    if isinstance(enabled, str):
+                        enabled = enabled.strip().lower() not in ("false", "0", "no", "off", "")
+                    else:
+                        enabled = bool(enabled)
+                    normalized.append({"url": u, "order": order, "enabled": enabled})
             if not normalized and isinstance(urls, list):
                 for raw in urls:
                     u = str(raw or "").strip()
                     if not u or u in seen:
                         continue
                     seen.add(u)
-                    normalized.append({"url": u, "order": default_order})
+                    normalized.append({"url": u, "order": default_order, "enabled": True})
             return normalized
 
         out["google_site_items"] = _normalize_items(out.get("google_site_items"), out.get("google_site_urls", []))
@@ -1745,6 +1750,13 @@ class IndexingController:
                 o = str(it.get("order", default_order) or default_order).strip().lower()
                 if o not in ("oldest", "newest"):
                     o = default_order
+                enabled = it.get("enabled", True)
+                if isinstance(enabled, str):
+                    enabled = enabled.strip().lower() not in ("false", "0", "no", "off", "")
+                else:
+                    enabled = bool(enabled)
+                if not enabled:
+                    continue
                 out.append({"url": u, "order": o})
         if not out:
             for raw in (fallback_urls or []):
@@ -2344,7 +2356,7 @@ if GUI_AVAILABLE:
             self.google_add_seed_btn.clicked.connect(lambda: self._add_seed_url_input("google"))
             seed_btn_row.addWidget(self.google_add_seed_btn, 0, Qt.AlignmentFlag.AlignLeft)
             self.google_seed_count_label = QLabel("총 URL 0개")
-            self.google_seed_count_label.setStyleSheet(f"color: {WP_COLORS['text_muted']}; font-size: 12px;")
+            self.google_seed_count_label.setStyleSheet(f"color: {WP_COLORS['text_muted']}; font-size: 18px; font-weight: 700;")
             seed_btn_row.addWidget(self.google_seed_count_label, 0, Qt.AlignmentFlag.AlignLeft)
             seed_btn_row.addStretch(1)
             s.addLayout(seed_btn_row)
@@ -2418,7 +2430,7 @@ if GUI_AVAILABLE:
             self.naver_add_seed_btn.clicked.connect(lambda: self._add_seed_url_input("naver"))
             seed_btn_row.addWidget(self.naver_add_seed_btn, 0, Qt.AlignmentFlag.AlignLeft)
             self.naver_seed_count_label = QLabel("총 URL 0개")
-            self.naver_seed_count_label.setStyleSheet(f"color: {WP_COLORS['text_muted']}; font-size: 12px;")
+            self.naver_seed_count_label.setStyleSheet(f"color: {WP_COLORS['text_muted']}; font-size: 18px; font-weight: 700;")
             seed_btn_row.addWidget(self.naver_seed_count_label, 0, Qt.AlignmentFlag.AlignLeft)
             seed_btn_row.addStretch(1)
             sd.addLayout(seed_btn_row)
@@ -2471,7 +2483,7 @@ if GUI_AVAILABLE:
         def _order_label(value: str) -> str:
             return "가장 최신 글부터" if value == "newest" else "가장 오래된 글부터"
 
-        def _add_seed_url_input(self, service: str, value: str = "", order: str = "oldest"):
+        def _add_seed_url_input(self, service: str, value: str = "", order: str = "oldest", enabled: bool = True):
             order = self._normalize_order_value(order)
             row_widget = QWidget()
             row_layout = QHBoxLayout(row_widget)
@@ -2486,31 +2498,36 @@ if GUI_AVAILABLE:
             order_combo.addItem("가장 최신 글부터", "newest")
             order_combo.setCurrentIndex(1 if order == "newest" else 0)
             order_combo.setMinimumWidth(170)
+            enabled_chk = QCheckBox("활성화")
+            enabled_chk.setChecked(bool(enabled))
+            enabled_chk.stateChanged.connect(lambda _s, svc=service: self._refresh_seed_url_count_label(svc))
             inp.multiline_urls_pasted.connect(
-                lambda raw, svc=service, target_inp=inp, target_order=order_combo: self._handle_seed_multiline_paste(
-                    svc, target_inp, target_order, raw
+                lambda raw, svc=service, target_inp=inp, target_order=order_combo, target_enabled=enabled_chk: self._handle_seed_multiline_paste(
+                    svc, target_inp, target_order, target_enabled, raw
                 )
             )
             row_layout.addWidget(inp, 1)
+            row_layout.addWidget(enabled_chk, 0)
             row_layout.addWidget(order_combo, 0)
             if service == "google":
-                self.google_seed_rows.append({"widget": row_widget, "input": inp, "order": order_combo})
+                self.google_seed_rows.append({"widget": row_widget, "input": inp, "enabled": enabled_chk, "order": order_combo})
                 self.google_seed_urls_layout.addWidget(row_widget)
                 QTimer.singleShot(0, lambda: self._scroll_seed_to_bottom("google"))
             else:
-                self.naver_seed_rows.append({"widget": row_widget, "input": inp, "order": order_combo})
+                self.naver_seed_rows.append({"widget": row_widget, "input": inp, "enabled": enabled_chk, "order": order_combo})
                 self.naver_seed_urls_layout.addWidget(row_widget)
                 QTimer.singleShot(0, lambda: self._scroll_seed_to_bottom("naver"))
             self._refresh_seed_url_count_label(service)
 
-        def _handle_seed_multiline_paste(self, service: str, target_inp: QLineEdit, target_order: QComboBox, raw_text: str):
+        def _handle_seed_multiline_paste(self, service: str, target_inp: QLineEdit, target_order: QComboBox, target_enabled: QCheckBox, raw_text: str):
             urls = self._lines(str(raw_text or "").replace("\r", "\n"))
             if not urls:
                 return
             current_order = self._normalize_order_value(str(target_order.currentData() or "oldest"))
+            current_enabled = bool(target_enabled.isChecked())
             target_inp.setText(urls[0])
             for u in urls[1:]:
-                self._add_seed_url_input(service, u, current_order)
+                self._add_seed_url_input(service, u, current_order, current_enabled)
             self._refresh_seed_url_count_label(service)
 
         def _refresh_seed_url_count_label(self, service: str):
@@ -2533,7 +2550,7 @@ if GUI_AVAILABLE:
                     if callable(maximum_fn) and callable(set_value_fn):
                         set_value_fn(maximum_fn())
 
-        def _set_seed_items(self, service: str, items: List[Dict[str, str]]):
+        def _set_seed_items(self, service: str, items: List[Dict[str, Any]]):
             rows = self.google_seed_rows if service == "google" else self.naver_seed_rows
             while rows:
                 r = rows.pop()
@@ -2542,28 +2559,38 @@ if GUI_AVAILABLE:
                     w.deleteLater()
             if items:
                 for it in items:
-                    self._add_seed_url_input(service, it.get("url", ""), it.get("order", "oldest"))
+                    self._add_seed_url_input(
+                        service,
+                        it.get("url", ""),
+                        it.get("order", "oldest"),
+                        bool(it.get("enabled", True)),
+                    )
             else:
                 self._add_seed_url_input(service)
             self._refresh_seed_url_count_label(service)
 
         def _collect_seed_urls(self, service: str) -> List[str]:
-            return [it["url"] for it in self._collect_seed_items(service)]
+            return [it["url"] for it in self._collect_seed_items(service, only_enabled=True)]
 
-        def _collect_seed_items(self, service: str) -> List[Dict[str, str]]:
+        def _collect_seed_items(self, service: str, only_enabled: bool = False) -> List[Dict[str, Any]]:
             seen, out = set(), []
             rows = self.google_seed_rows if service == "google" else self.naver_seed_rows
             for row in rows:
                 inp = row.get("input")
+                enabled_chk = row.get("enabled")
                 cb = row.get("order")
-                if inp is None or cb is None:
+                if inp is None or enabled_chk is None or cb is None:
                     continue
                 u = inp.text().strip()
+                enabled = bool(enabled_chk.isChecked())
                 if u and u not in seen:
                     seen.add(u)
+                    if only_enabled and not enabled:
+                        continue
                     out.append(
                         {
                             "url": u,
+                            "enabled": enabled,
                             "order": self._normalize_order_value(str(cb.currentData() or "oldest")),
                         }
                     )
@@ -3055,11 +3082,11 @@ if GUI_AVAILABLE:
             global_order = self._normalize_order_value(c.get("submit_order", "oldest"))
             google_items = c.get("google_site_items")
             if not isinstance(google_items, list):
-                google_items = [{"url": u, "order": global_order} for u in (c.get("google_site_urls") or []) if str(u or "").strip()]
+                google_items = [{"url": u, "order": global_order, "enabled": True} for u in (c.get("google_site_urls") or []) if str(u or "").strip()]
             naver_items = c.get("naver_site_items")
             if not isinstance(naver_items, list):
                 naver_urls = c.get("naver_site_urls") or ([c.get("naver_site_url")] if c.get("naver_site_url") else [])
-                naver_items = [{"url": u, "order": global_order} for u in naver_urls if str(u or "").strip()]
+                naver_items = [{"url": u, "order": global_order, "enabled": True} for u in naver_urls if str(u or "").strip()]
             self._set_seed_items("google", google_items)
             self._set_seed_items("naver", naver_items)
             self._on_naver_method_changed("selenium")
