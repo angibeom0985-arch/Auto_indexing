@@ -31,6 +31,7 @@ NAVER_QUOTA_FILE = os.path.join(SETTING_DIR, "naver_quota.json")
 URL_STATE_DB_FILE = os.path.join(SETTING_DIR, "indexing_state.db")
 LOG_FILE = os.path.join(SETTING_DIR, "auto_indexing_log.txt")
 KAKAO_CONTACT_URL = "https://open.kakao.com/me/david0985"
+LICENSE_REVALIDATION_INTERVAL_MS = 60 * 60 * 1000
 
 
 def _window_icon_source() -> str:
@@ -450,6 +451,59 @@ def show_license_failure_dialog(message: str, machine_id: str) -> None:
     ok_btn.clicked.connect(dlg.accept)
     dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
     dlg.exec()
+
+
+def install_periodic_license_guard(app: Any, license_manager: Any, main_window: Any) -> None:
+    """실행 중 60분마다 라이선스를 재검증하고 실패 시 즉시 차단."""
+    if not GUI_AVAILABLE:
+        return
+
+    state = {"blocked": False}
+    timer = QTimer(app)
+    timer.setInterval(LICENSE_REVALIDATION_INTERVAL_MS)
+
+    def force_block(message: str) -> None:
+        if state["blocked"]:
+            return
+        state["blocked"] = True
+        machine_id = ""
+        try:
+            machine_id = license_manager.get_machine_id()
+        except Exception:
+            machine_id = ""
+        try:
+            if main_window is not None:
+                main_window.hide()
+        except Exception:
+            pass
+
+        if "등록되지 않은 컴퓨터" in message:
+            show_unregistered_machine_dialog(machine_id)
+        elif "만료" in message:
+            show_expired_license_dialog()
+        else:
+            show_license_failure_dialog(message, machine_id or "확인 불가")
+
+        try:
+            app.exit(1)
+        except Exception:
+            os._exit(1)
+
+    def revalidate_license() -> None:
+        if state["blocked"]:
+            return
+        try:
+            valid, message = license_manager.verify_license()
+        except Exception as e:
+            force_block(f"주기 라이선스 검증 중 오류가 발생했습니다.\n{e}")
+            return
+        if not valid:
+            force_block(message)
+
+    timer.timeout.connect(revalidate_license)
+    timer.start()
+    # 가비지 컬렉션 방지: 앱 객체에 타이머 참조를 유지한다.
+    setattr(app, "_license_revalidation_timer", timer)
 
 try:
     import requests
@@ -3294,7 +3348,6 @@ def run_gui() -> int:
         if not ok:
             startup_dialog.close()
             machine_id = lm.get_machine_id()
-            full_message = f"{msg}\n\n현재 머신 ID:\n{machine_id}"
             if "등록되지 않은 컴퓨터" in msg:
                 show_unregistered_machine_dialog(machine_id)
             elif "만료" in msg:
@@ -3315,6 +3368,7 @@ def run_gui() -> int:
     startup_dialog.close()
     w = ModernIndexingGUI(usage_period_text=usage_period_text)
     w.showMaximized()
+    install_periodic_license_guard(app, lm, w)
     try:
         return app.exec()
     except KeyboardInterrupt:
