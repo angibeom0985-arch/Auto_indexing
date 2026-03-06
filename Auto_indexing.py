@@ -2356,7 +2356,7 @@ if GUI_AVAILABLE:
             self.google_add_seed_btn.clicked.connect(lambda: self._add_seed_url_input("google"))
             seed_btn_row.addWidget(self.google_add_seed_btn, 0, Qt.AlignmentFlag.AlignLeft)
             self.google_seed_count_label = QLabel("총 URL 0개")
-            self.google_seed_count_label.setStyleSheet(f"color: {WP_COLORS['text_muted']}; font-size: 18px; font-weight: 700;")
+            self.google_seed_count_label.setStyleSheet(f"color: {WP_COLORS['text_muted']}; font-size: 14px; font-weight: 700;")
             seed_btn_row.addWidget(self.google_seed_count_label, 0, Qt.AlignmentFlag.AlignLeft)
             seed_btn_row.addStretch(1)
             s.addLayout(seed_btn_row)
@@ -2430,7 +2430,7 @@ if GUI_AVAILABLE:
             self.naver_add_seed_btn.clicked.connect(lambda: self._add_seed_url_input("naver"))
             seed_btn_row.addWidget(self.naver_add_seed_btn, 0, Qt.AlignmentFlag.AlignLeft)
             self.naver_seed_count_label = QLabel("총 URL 0개")
-            self.naver_seed_count_label.setStyleSheet(f"color: {WP_COLORS['text_muted']}; font-size: 18px; font-weight: 700;")
+            self.naver_seed_count_label.setStyleSheet(f"color: {WP_COLORS['text_muted']}; font-size: 14px; font-weight: 700;")
             seed_btn_row.addWidget(self.naver_seed_count_label, 0, Qt.AlignmentFlag.AlignLeft)
             seed_btn_row.addStretch(1)
             sd.addLayout(seed_btn_row)
@@ -3040,21 +3040,21 @@ if GUI_AVAILABLE:
         def _show_usage_guides(self):
             self.google_log.setHtml(
                 """
-                <div style="font-size:15px; line-height:2.05;">
-                  <h2 style="font-size:20px; margin:0 0 2px 0; line-height:1.25;">구글 색인 자동화 사용 방법</h2>
+                <div style="font-size:13px; line-height:1.72;">
+                  <h2 style="font-size:16px; margin:0 0 4px 0; line-height:1.3;">구글 색인 자동화 사용 방법</h2>
                   <p style="margin:0 0 10px 0; color:#cbd5e1;">처음 사용하는 분도 그대로 따라 할 수 있게, 입력 칸 기준으로 설명합니다.</p>
-                  <h3 style="font-size:17px; margin:0 0 10px 0;">[JSON 파일]</h3>
+                  <h3 style="font-size:14px; margin:0 0 8px 0;">[JSON 파일]</h3>
                   <p style="margin:0 0 7px 0;">- 이 칸에는 <b>서비스 계정 JSON 파일</b>을 등록합니다.</p>
                   <p style="margin:0 0 7px 0;">- <b>업로드</b>: 지금 선택한 파일들로 목록을 새로 바꿉니다.</p>
                   <p style="margin:0 0 7px 0;">- <b>+추가</b>: 이미 등록된 목록에 JSON 파일을 더 붙입니다.</p>
                   <p style="margin:0 0 7px 0;">- <b>삭제</b>: 등록된 JSON 목록을 비웁니다.</p>
                   <p style="margin:0 0 14px 0;">- 발급이 어려우면 <a href="help://google-key" style="color:#38bdf8; text-decoration:underline;"><b>구글 인증 키 발급 방법</b></a>을 눌러 상세 안내를 보세요.</p>
-                  <h3 style="font-size:17px; margin:0 0 10px 0;">[색인 요청할 도메인 URL]</h3>
+                  <h3 style="font-size:14px; margin:0 0 8px 0;">[색인 요청할 도메인 URL]</h3>
                   <p style="margin:0 0 7px 0;">- 색인할 사이트의 <b>도메인 URL</b>을 입력합니다. 예) https://example.com</p>
                   <p style="margin:0 0 7px 0;">- 사이트가 여러 개면 <b>+ 추가</b>로 칸을 늘려 각각 입력합니다.</p>
                   <p style="margin:0 0 7px 0;">- URL 입력칸 1개만 있어도, 여러 URL을 줄바꿈한 뒤 <b>붙여넣기(Ctrl+V)</b>하면 칸이 자동으로 추가되어 한 번에 등록됩니다.</p>
                   <p style="margin:0 0 14px 0;">- 각 URL 오른쪽에서 사이트별로 <b>요청 순서</b>를 고를 수 있습니다.<br>(가장 오래된 글부터 / 가장 최신 글부터)</p>
-                  <h3 style="font-size:17px; margin:0 0 10px 0;">[버튼 사용 순서]</h3>
+                  <h3 style="font-size:14px; margin:0 0 8px 0;">[버튼 사용 순서]</h3>
                   <p style="margin:0 0 7px 0;">1. JSON 파일과 사이트 URL을 입력합니다.</p>
                   <p style="margin:0 0 7px 0;">2. <b>저장</b> 버튼으로 현재 입력값을 저장합니다.</p>
                   <p style="margin:0 0 7px 0;">3. <b>▶ 구글 등록 시작</b> 버튼을 누르면 자동으로 색인 요청을 진행합니다.</p>
@@ -3066,8 +3066,8 @@ if GUI_AVAILABLE:
             )
             self.naver_log.setHtml(
                 """
-                <div style="font-size:15px; line-height:2.05;">
-                  <h2 style="font-size:20px; margin:0 0 2px 0; line-height:1.25;">네이버 색인 자동화 사용 방법</h2>
+                <div style="font-size:13px; line-height:1.72;">
+                  <h2 style="font-size:16px; margin:0 0 4px 0; line-height:1.3;">네이버 색인 자동화 사용 방법</h2>
                   <p style="margin:0 0 10px 0; color:#cbd5e1;">입력 칸 이름 그대로 따라 입력하면 바로 사용할 수 있습니다.</p>
                   <div style="margin-bottom:10px; padding:10px 12px; border:1px solid #dc3232; border-radius:8px; color:#ffd7d7;">
                     <b>중요:</b> 네이버 계정은 <b>서치어드바이저에 사이트를 등록한 계정</b>이어야 합니다.
@@ -3075,15 +3075,15 @@ if GUI_AVAILABLE:
                   <div style="margin-bottom:12px; padding:10px 12px; border:1px solid #dc3232; border-radius:8px; color:#ffd7d7;">
                     <b>필수 조건:</b> 네이버 기능은 <b>Rank Math 플러그인을 사용하는 워드프레스 사이트</b>만 지원합니다.
                   </div>
-                  <h3 style="font-size:17px; margin:0 0 10px 0;">[네이버 계정 설정]</h3>
+                  <h3 style="font-size:14px; margin:0 0 8px 0;">[네이버 계정 설정]</h3>
                   <p style="margin:0 0 7px 0;">- <b>네이버 로그인 아이디</b>: 사이트를 등록한 네이버 계정 아이디</p>
                   <p style="margin:0 0 14px 0;">- <b>네이버 비밀번호</b>: 해당 계정 비밀번호 (공개/비공개 버튼 지원)</p>
-                  <h3 style="font-size:17px; margin:0 0 10px 0;">[색인 요청할 도메인 URL]</h3>
+                  <h3 style="font-size:14px; margin:0 0 8px 0;">[색인 요청할 도메인 URL]</h3>
                   <p style="margin:0 0 7px 0;">- 색인할 사이트의 <b>도메인 URL</b>을 입력합니다. 예) https://example.com</p>
                   <p style="margin:0 0 7px 0;">- 여러 사이트를 쓰면 <b>+ 추가</b>로 칸을 늘려 입력합니다.</p>
                   <p style="margin:0 0 7px 0;">- URL 입력칸 1개만 있어도, 여러 URL을 줄바꿈한 뒤 <b>붙여넣기(Ctrl+V)</b>하면 칸이 자동으로 추가되어 한 번에 등록됩니다.</p>
                   <p style="margin:0 0 14px 0;">- 각 URL 오른쪽에서 사이트별로 <b>요청 순서</b>를 고를 수 있습니다.<br>(가장 오래된 글부터 / 가장 최신 글부터)</p>
-                  <h3 style="font-size:17px; margin:0 0 10px 0;">[버튼 사용 순서]</h3>
+                  <h3 style="font-size:14px; margin:0 0 8px 0;">[버튼 사용 순서]</h3>
                   <p style="margin:0 0 7px 0;">1. 네이버 계정과 사이트 URL을 입력합니다.</p>
                   <p style="margin:0 0 7px 0;">2. <b>저장</b> 버튼으로 현재 입력값을 저장합니다.</p>
                   <p style="margin:0 0 7px 0;">3. <b>▶ 네이버 색인 요청</b> 버튼을 누르면 자동으로 진행됩니다.</p>
