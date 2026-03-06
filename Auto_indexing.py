@@ -2362,7 +2362,7 @@ if GUI_AVAILABLE:
             s.addLayout(seed_btn_row)
             s.addWidget(self.google_seed_scroll, 1)
             self._add_seed_url_input("google")
-            log_group = QGroupBox("로그 메시지")
+            log_group = QGroupBox("진행 현황")
             gl = QVBoxLayout(log_group)
             google_log_top = QHBoxLayout()
             google_log_top.addStretch(1)
@@ -2436,7 +2436,7 @@ if GUI_AVAILABLE:
             sd.addLayout(seed_btn_row)
             sd.addWidget(self.naver_seed_scroll, 1)
             self._add_seed_url_input("naver")
-            log_group = QGroupBox("로그 메시지")
+            log_group = QGroupBox("진행 현황")
             nl = QVBoxLayout(log_group)
             naver_log_top = QHBoxLayout()
             naver_log_top.addStretch(1)
@@ -2636,8 +2636,58 @@ if GUI_AVAILABLE:
             )
 
         def _on_error_logged(self, service: str, message: str):
-            # Keep the main log compact and collect raw error lines for the detail dialog.
+            # Keep a per-run error snapshot and show an actionable contact dialog on error.
+            self._ensure_error_visible_in_progress(service, message)
             self._record_active_error_detail(service, message)
+            self._show_error_contact_dialog(service, message)
+
+        def _ensure_error_visible_in_progress(self, service: str, message: str):
+            target = self.google_log if service == "google" else self.naver_log
+            line = str(message or "").strip()
+            if not line or target is None:
+                return
+            lines = [ln.strip() for ln in target.toPlainText().splitlines() if ln.strip()]
+            if not lines or lines[-1] != line:
+                self._append_log(service, line)
+
+        def _show_error_contact_dialog(self, service: str, message: str):
+            service_label = self._service_label(service)
+            error_text = self._strip_error_line(message)
+            tip = self._resolve_troubleshooting_tip(service, error_text)
+            payload = self._build_david_message(service, error_text, tip)
+
+            dlg = QDialog(self)
+            dlg.setWindowTitle(f"{service_label} 오류 안내")
+            dlg.resize(760, 460)
+            layout = QVBoxLayout(dlg)
+
+            title = QLabel("오류가 발생했습니다. 아래 내용을 복사해 전달해주세요.")
+            title.setWordWrap(True)
+            layout.addWidget(title, 0)
+
+            message_box = GlassTextEdit(dlg)
+            message_box.setPlainText(payload)
+            message_box.setReadOnly(True)
+            layout.addWidget(message_box, 1)
+
+            btn_row = QHBoxLayout()
+            btn_row.addStretch(1)
+            copy_btn = GlassButton("복사", "secondary")
+            close_btn = GlassButton("확인", "primary")
+            btn_row.addWidget(copy_btn)
+            btn_row.addWidget(close_btn)
+            layout.addLayout(btn_row)
+
+            def _copy_payload():
+                cb = QApplication.clipboard()
+                if cb is not None:
+                    cb.setText(payload)
+                copy_btn.setText("복사됨")
+                QTimer.singleShot(900, lambda: copy_btn.setText("복사"))
+
+            copy_btn.clicked.connect(_copy_payload)
+            close_btn.clicked.connect(dlg.accept)
+            dlg.exec()
 
         @staticmethod
         def _unique_preserve_order(lines: List[str]) -> List[str]:
